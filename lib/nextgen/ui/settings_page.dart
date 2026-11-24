@@ -327,7 +327,7 @@ class _NgSettingsPageState extends State<NgSettingsPage> {
                     key: const ValueKey('ng-privacy-policy-link'),
                     icon: Icons.privacy_tip_outlined,
                     title: ngL.privacy_policy,
-                    onTap: openAresPrivacyPolicy,
+                    onTap: openHermesPrivacyPolicy,
                   ),
                   NgRow(
                     icon: Icons.description_outlined,
@@ -336,7 +336,7 @@ class _NgSettingsPageState extends State<NgSettingsPage> {
                       registerAppLicenses();
                       showLicensePage(
                         context: context,
-                        applicationName: 'Ares - formerly Hermes Android',
+                        applicationName: 'Hermes Agent',
                       );
                     },
                   ),
@@ -542,7 +542,7 @@ class NgNotificationSettings extends StatelessWidget {
   }
 }
 
-/// What Ares tried to post lately and what came of it, so a notification
+/// What Hermes tried to post lately and what came of it, so a notification
 /// that never showed can be explained on the phone.
 class NgRecentNotificationsSheet extends StatelessWidget {
   const NgRecentNotificationsSheet({super.key});

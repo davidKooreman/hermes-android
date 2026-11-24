@@ -1479,7 +1479,7 @@ class _AssistantBlockState extends State<_AssistantBlock> {
                   _ActionIcon(
                     icon: Icons.flag_outlined,
                     tooltip: ngL.report_ai_output,
-                    onTap: reportAresAiOutput,
+                    onTap: reportHermesAiOutput,
                   ),
                   if (widget.onRetry != null)
                     _ActionIcon(

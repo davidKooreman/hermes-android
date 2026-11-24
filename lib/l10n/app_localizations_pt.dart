@@ -177,7 +177,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get setup_interface_classic_description =>
-      'A área de trabalho original do Ares, com todos os controlos de ligação e definições Classic.';
+      'A área de trabalho original do Hermes, com todos os controlos de ligação e definições Classic.';
 
   @override
   String get setup_interface_nextgen_description =>
@@ -1462,10 +1462,10 @@ class AppLocalizationsPt extends AppLocalizations {
   String get go_to_end => 'Ir para o fim';
 
   @override
-  String get hermes_agent => 'Ares - formerly Hermes Android';
+  String get hermes_agent => 'Hermes Agent';
 
   @override
-  String get hermes_agent_for_android => 'Ares - formerly Hermes Android';
+  String get hermes_agent_for_android => 'Hermes Agent';
 
   @override
   String get hermes_could_not_accept_the_answer_please_try_again =>
@@ -1488,7 +1488,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get hermes_keeps_android_accessibility_text_scaling_active =>
-      'O Ares mantém a escala de texto de acessibilidade do Android ativa.';
+      'O Hermes mantém a escala de texto de acessibilidade do Android ativa.';
 
   @override
   String get hermes_needs_your_input => 'O Hermes precisa da sua entrada';
@@ -3209,7 +3209,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get a_newer_hermes_android_build_is_available_on_github =>
-      'Está disponível no GitHub uma compilação mais recente do Ares.';
+      'Está disponível no GitHub uma compilação mais recente do Hermes.';
 
   @override
   String get release_notes => 'Notas de lançamento';
@@ -4621,7 +4621,7 @@ class AppLocalizationsPt extends AppLocalizations {
       'Demasiadas tentativas. Aguarde um momento e tente novamente.';
 
   @override
-  String get ng_welcome_to_hermes => 'Bem-vindo ao Ares';
+  String get ng_welcome_to_hermes => 'Bem-vindo ao Hermes';
 
   @override
   String get ng_add_a_gateway => 'Adicionar um gateway';
@@ -5721,7 +5721,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get ng_notifications_hint =>
-      'Respostas e pedidos enquanto o Ares está em segundo plano';
+      'Respostas e pedidos enquanto o Hermes está em segundo plano';
 
   @override
   String get ng_notify_replies => 'Respostas';
@@ -5750,14 +5750,14 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get ng_battery_settings_hint =>
-      'Permita que o Ares funcione em segundo plano para receber notificações atempadamente';
+      'Permita que o Hermes funcione em segundo plano para receber notificações atempadamente';
 
   @override
   String get ng_send_test_notification => 'Enviar uma notificação de teste';
 
   @override
   String get ng_test_notification_title =>
-      'As notificações do Ares estão a funcionar';
+      'As notificações do Hermes estão a funcionar';
 
   @override
   String get ng_test_notification_body =>
@@ -5772,7 +5772,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get ng_notifications_off_hint =>
-      'As notificações estão desativadas, por isso não será apresentada nenhuma enquanto o Ares estiver em segundo plano.';
+      'As notificações estão desativadas, por isso não será apresentada nenhuma enquanto o Hermes estiver em segundo plano.';
 
   @override
   String get ng_insights_building =>
@@ -5841,7 +5841,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get ng_recent_notifications_hint =>
-      'O que o Ares tentou publicar e se o Android apresentou a notificação';
+      'O que o Hermes tentou publicar e se o Android apresentou a notificação';
 
   @override
   String get ng_recent_notifications_empty =>
@@ -6032,7 +6032,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get setup_interface_classic_description =>
-      'A área de trabalho original do Ares, com todos os controles de conexão e configurações do Classic.';
+      'A área de trabalho original do Hermes, com todos os controles de conexão e configurações do Classic.';
 
   @override
   String get setup_interface_nextgen_description =>
@@ -7244,10 +7244,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get go_to_end => 'Ir para o fim';
 
   @override
-  String get hermes_agent => 'Ares - formerly Hermes Android';
+  String get hermes_agent => 'Hermes Agent';
 
   @override
-  String get hermes_agent_for_android => 'Ares - formerly Hermes Android';
+  String get hermes_agent_for_android => 'Hermes Agent';
 
   @override
   String get hermes_could_not_accept_the_answer_please_try_again =>
@@ -7270,7 +7270,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get hermes_keeps_android_accessibility_text_scaling_active =>
-      'O Ares mantém a escala de texto de acessibilidade do Android ativa.';
+      'O Hermes mantém a escala de texto de acessibilidade do Android ativa.';
 
   @override
   String get hermes_needs_your_input => 'O Hermes precisa da sua entrada';
@@ -8982,7 +8982,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get a_newer_hermes_android_build_is_available_on_github =>
-      'Há uma versão mais recente do Ares no GitHub.';
+      'Há uma versão mais recente do Hermes no GitHub.';
 
   @override
   String get release_notes => 'Notas da versão';
@@ -10281,7 +10281,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'Muitas tentativas. Aguarde um momento e tente novamente.';
 
   @override
-  String get ng_welcome_to_hermes => 'Boas-vindas ao Ares';
+  String get ng_welcome_to_hermes => 'Boas-vindas ao Hermes';
 
   @override
   String get ng_add_a_gateway => 'Adicionar gateway';
@@ -11378,7 +11378,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get ng_notifications_hint =>
-      'Respostas e solicitações enquanto o Ares está em segundo plano';
+      'Respostas e solicitações enquanto o Hermes está em segundo plano';
 
   @override
   String get ng_notify_replies => 'Respostas';
@@ -11406,14 +11406,14 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get ng_battery_settings_hint =>
-      'Permite que o Ares funcione em segundo plano para que as notificações cheguem no horário certo';
+      'Permite que o Hermes funcione em segundo plano para que as notificações cheguem no horário certo';
 
   @override
   String get ng_send_test_notification => 'Enviar notificação de teste';
 
   @override
   String get ng_test_notification_title =>
-      'As notificações do Ares estão funcionando';
+      'As notificações do Hermes estão funcionando';
 
   @override
   String get ng_test_notification_body =>
@@ -11428,7 +11428,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get ng_notifications_off_hint =>
-      'As notificações estão desativadas, então nada será exibido enquanto o Ares estiver em segundo plano.';
+      'As notificações estão desativadas, então nada será exibido enquanto o Hermes estiver em segundo plano.';
 
   @override
   String get ng_insights_building =>
@@ -11497,7 +11497,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get ng_recent_notifications_hint =>
-      'O que o Ares tentou publicar e se o Android exibiu a notificação';
+      'O que o Hermes tentou publicar e se o Android exibiu a notificação';
 
   @override
   String get ng_recent_notifications_empty =>

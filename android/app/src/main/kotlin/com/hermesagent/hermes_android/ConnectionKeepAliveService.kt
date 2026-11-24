@@ -36,15 +36,18 @@ class ConnectionKeepAliveService : Service() {
         super.onTaskRemoved(rootIntent)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // A sticky restart would carry no live Dart side to ever stop it; the
-        // Dart lifecycle re-starts the service when the app comes back.
-        if (intent == null) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
+    private var startedForeground = false
+
+    override fun onCreate() {
+        super.onCreate()
+        // Promote to foreground as early as possible. The OS timer starts when
+        // Context.startForegroundService() is called; doing this in onCreate gives
+        // us the maximum headroom before onStartCommand runs.
         createChannel()
-        val notification = buildNotification()
+        val notification = buildNotification(
+            getString(R.string.new_chat_title),
+            "Keeping connection alive…",
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NOTIFICATION_ID,
@@ -53,6 +56,24 @@ class ConnectionKeepAliveService : Service() {
             )
         } else {
             startForeground(NOTIFICATION_ID, notification)
+        }
+        startedForeground = true
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // If we already promoted to foreground in onCreate, just update the text.
+        if (startedForeground && intent != null) {
+            val label = getString(R.string.new_chat_title)
+            val notification = buildNotification(label, "Finishing your request")
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(NOTIFICATION_ID, notification)
+        }
+
+        // A sticky restart would carry no live Dart side to ever stop it; the
+        // Dart lifecycle re-starts the service when the app comes back.
+        if (intent == null) {
+            stopSelf(startId)
+            return START_NOT_STICKY
         }
         return START_NOT_STICKY
     }
@@ -75,7 +96,7 @@ class ConnectionKeepAliveService : Service() {
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(title: String, text: String): Notification {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         val pendingIntent = launchIntent?.let {
             PendingIntent.getActivity(
@@ -93,8 +114,8 @@ class ConnectionKeepAliveService : Service() {
         }
         return builder
             .setSmallIcon(R.drawable.ic_stat_mobile_push)
-            .setContentTitle("Ares")
-            .setContentText("Staying connected while your agent works")
+            .setContentTitle(title)
+            .setContentText(text)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

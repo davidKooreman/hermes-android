@@ -6,10 +6,12 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'core/services/hands_free_route_observer.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/models/client_certificate.dart';
 import 'core/services/android_launch_intent_service.dart';
 import 'core/services/android_share_intent_service.dart';
+import 'core/services/auto_messaging_service.dart';
 import 'core/services/client_certificate_service.dart';
 import 'core/services/composer_draft_store.dart';
 import 'core/services/config_backup.dart';
@@ -36,6 +38,7 @@ import 'core/screens/chat_screen.dart';
 import 'core/screens/workspace_screen.dart';
 import 'core/theme/hermes_theme.dart';
 import 'core/utils/responsive.dart';
+import 'core/utils/new_chat_options.dart';
 import 'core/widgets/config_backup_card.dart';
 import 'core/widgets/theme_palette_picker.dart';
 import 'core/widgets/hermes_system_ui.dart';
@@ -88,6 +91,7 @@ class _StartupAppState extends State<StartupApp> {
     super.initState();
     // A pending secure-store read must not keep the native splash on screen.
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      AutoMessagingService.initialize();
       if (mounted) unawaited(_initialize());
     });
   }
@@ -108,6 +112,11 @@ class _StartupAppState extends State<StartupApp> {
           // interfaces; a Keystore fault only costs those sign-ins.
           await HermesSignInVault.instance.load().catchError((Object _) {});
           connManager = await _createConnectionManager(prefs);
+          if (connManager != null) {
+            await AutoMessagingService.publishAutoEntryForConnections(
+              connManager!.getConnections(),
+            );
+          }
         } catch (error) {
           // A corrupt connection entry or a Keystore fault must lead to the
           // existing reset/retry screen, never to Home with unhydrated secrets.
@@ -441,10 +450,15 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
     _mobilePush.addListener(_onMobilePushChanged);
     notificationResponseHandler = _notificationHandler;
     ConnectionMutationBarrier.addListener(_pruneApprovalActions);
+    // Android Auto / launcher actions must be handled at the app root: the
+    // NextGen home does not mount HomeScreen, so a HomeScreen-only listener
+    // would silently drop every voice reply.
+    widget.launchIntents?.pendingAction.addListener(_onLaunchAction);
     // A notification that launched a terminated app carries its tap/action in
     // the platform's launch details; route it once the first frame is up.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
+      _onLaunchAction();
       final initialGeneration = _notificationGeneration;
       _rootFrameReady = true;
       unawaited(_loadBackgroundPolicy());
@@ -501,6 +515,214 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
     if (!mounted || _closingTurnOwner) return;
     _ongoingSignature = null;
     _syncOngoingChats();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Android Auto / launcher launch actions (app-root routing)
+  // ---------------------------------------------------------------------------
+
+  void _onLaunchAction() {
+    if (!mounted) return;
+    final action = widget.launchIntents?.takePendingAction();
+    debugPrint(
+      '[HermesAuto] HermesAppState._onLaunchAction action=${action?.kind} '
+      'sessionId=${action?.sessionId} message=${action?.message}',
+    );
+    if (action == null) return;
+    switch (action.kind) {
+      case LaunchActionKind.quickChat:
+        _openExternalWorkspace(quickChat: true);
+        break;
+      case LaunchActionKind.newChat:
+        _openExternalWorkspace();
+        break;
+      case LaunchActionKind.voiceReply:
+        unawaited(_handleExternalVoiceReply(action));
+        break;
+    }
+  }
+
+  SavedConnection? _externalConnectionFor(LaunchAction action) {
+    final connections = widget.connManager.getConnections();
+    String? id;
+    final json = action.connectionJson;
+    if (json != null && json.isNotEmpty) {
+      try {
+        final map = jsonDecode(json) as Map<String, dynamic>;
+        id = map['id'] as String?;
+      } catch (_) {
+        // Fall through to the last-used connection.
+      }
+    }
+    if (id != null && id.isNotEmpty) {
+      final match = connections.where((c) => c.id == id).firstOrNull;
+      if (match != null) return match;
+    }
+    final lastId = widget.connManager.prefs.getString(
+      HomeScreenState._lastConnectionKey,
+    );
+    final preferred = connections
+        .where((c) => c.id == lastId)
+        .firstOrNull;
+    return preferred ?? (connections.length == 1 ? connections.single : null);
+  }
+
+  void _openExternalWorkspace({bool quickChat = false}) {
+    final nav = _navigatorKey.currentState;
+    if (nav == null) return;
+    final connections = widget.connManager.getConnections();
+    final lastId = widget.connManager.prefs.getString(
+      HomeScreenState._lastConnectionKey,
+    );
+    final connection = connections.where((c) => c.id == lastId).firstOrNull ??
+        (connections.length == 1 ? connections.single : null);
+    if (connection == null) return;
+    widget.connManager.prefs.setString(
+      HomeScreenState._lastConnectionKey,
+      connection.id,
+    );
+    nav.push(
+      MaterialPageRoute<void>(
+        builder: (_) => WorkspaceScreen(
+          connection: connection,
+          turnApplicationController: _turnApplicationController,
+          initialQuickChat: quickChat,
+          sessionsRefreshInterval: const Duration(seconds: 10),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleExternalVoiceReply(LaunchAction action) async {
+    final message = action.message;
+    final sessionId = action.sessionId;
+    if (message == null || message.isEmpty) return;
+    final connection = _externalConnectionFor(action);
+    if (connection == null) {
+      debugPrint('[HermesAuto] _handleExternalVoiceReply: no connection');
+      return;
+    }
+    final nav = _navigatorKey.currentState;
+    if (nav == null) return;
+    widget.connManager.prefs.setString(
+      HomeScreenState._lastConnectionKey,
+      connection.id,
+    );
+
+    Session? session;
+    if (sessionId != null && sessionId.isNotEmpty && sessionId != '__new__') {
+      session = await ApiClient.forConnection(connection)
+          .getSessionById(sessionId)
+          .catchError((Object _) => null);
+    }
+    if (!mounted) return;
+    if (session == null) {
+      final now = DateTime.now();
+      session = Session(
+        id: GatewayChatClient.generateSessionId(),
+        title: 'Quick chat',
+        model: kDefaultChatModel,
+        source: 'mobile',
+        messageCount: 0,
+        isActive: true,
+        preview: '',
+        startedAt: now.millisecondsSinceEpoch / 1000.0,
+        isLocalDraft: true,
+      );
+    }
+    debugPrint(
+      '[HermesAuto] _handleExternalVoiceReply opening session=${session.id}',
+    );
+
+    // Messaging-app behaviour (Teams/WhatsApp style): send the reply in the
+    // background, post the answer as a car notification and speak it, instead
+    // of forcing the phone UI open. Fall back to the chat screen only when the
+    // headless send cannot run.
+    final delivered = await _sendVoiceReplyHeadless(
+      connection: connection,
+      session: session,
+      message: message,
+    );
+    if (!mounted) return;
+    if (!delivered) {
+      nav.push(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatScreen(
+            connection: connection,
+            session: session!,
+            turnApplicationController: _turnApplicationController,
+            initialVoiceReply: message,
+          ),
+        ),
+      );
+    }
+  }
+
+  /// Sends an Android Auto voice reply without opening the phone UI, then
+  /// posts the assistant answer as a car-compliant notification and speaks it.
+  /// Returns true when an answer was delivered to the car.
+  Future<bool> _sendVoiceReplyHeadless({
+    required SavedConnection connection,
+    required Session session,
+    required String message,
+  }) async {
+    final gateway = DesktopGatewayClient.fromConnection(connection);
+    final buffer = StringBuffer();
+    final done = Completer<void>();
+    try {
+      await gateway.ensureSession(session.id);
+      await gateway.submitPrompt(
+        sessionId: session.id,
+        text: message,
+        onEvent: (event) {
+          if (event.type == 'message.delta') {
+            final token = event.data['text']?.toString() ?? '';
+            if (token.isNotEmpty) buffer.write(token);
+          } else if (event.type == 'message.complete') {
+            final complete =
+                event.data['rendered']?.toString() ??
+                event.data['text']?.toString() ??
+                '';
+            if (complete.isNotEmpty) {
+              buffer
+                ..clear()
+                ..write(complete);
+            }
+            if (!done.isCompleted) done.complete();
+          }
+        },
+        onSent: () {},
+      );
+      await done.future.timeout(
+        const Duration(minutes: 5),
+        onTimeout: () {},
+      );
+      final answer = buffer.toString().trim();
+      if (answer.isEmpty) {
+        debugPrint('[HermesAuto] headless send produced no answer');
+        return false;
+      }
+      await AutoMessagingService.showAssistantMessage(
+        sessionId: session.id,
+        title: session.title,
+        body: answer,
+        connectionJson: AutoMessagingService.safeConnectionJson(connection),
+      );
+      try {
+        final tts = FlutterTts();
+        await tts.setLanguage('nl-NL');
+        await tts.speak(answer);
+      } catch (e) {
+        debugPrint('[HermesAuto] headless TTS failed: $e');
+      }
+      debugPrint('[HermesAuto] headless voice reply delivered');
+      return true;
+    } catch (e) {
+      debugPrint('[HermesAuto] headless voice reply failed: $e');
+      return false;
+    } finally {
+      gateway.close();
+    }
   }
 
   @override
@@ -1398,6 +1620,9 @@ class HomeScreenState extends State<HomeScreen> {
 
   void _refresh() {
     setState(() => _connections = widget.connManager.getConnections());
+    unawaited(
+      AutoMessagingService.publishAutoEntryForConnections(_connections),
+    );
     final controller = widget.turnApplicationController;
     for (final connection in _connections) {
       if (DesktopGatewayClient.endpointDigestFor(connection) == null) {
@@ -1533,6 +1758,8 @@ class HomeScreenState extends State<HomeScreen> {
     _refresh();
     widget.shareIntents?.pendingShare.addListener(_onSharedText);
     widget.launchIntents?.pendingQuickChat.addListener(_onQuickChat);
+    // Launch actions are routed at the app root (HermesAppState) so they also
+    // work when the NextGen home is active instead of HomeScreen.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _onSharedText();
       _onQuickChat();
@@ -1565,10 +1792,126 @@ class HomeScreenState extends State<HomeScreen> {
     _navigateToWorkspace(connection);
   }
 
+  void _onLaunchAction() {
+    if (!mounted) return;
+    final action = widget.launchIntents?.takePendingAction();
+    debugPrint('[HermesAuto] _onLaunchAction action=${action?.kind} sessionId=${action?.sessionId} message=${action?.message}');
+    if (action == null) return;
+    switch (action.kind) {
+      case LaunchActionKind.quickChat:
+        _onQuickChat();
+        break;
+      case LaunchActionKind.newChat:
+        _handleNewChat(action);
+        break;
+      case LaunchActionKind.voiceReply:
+        _handleVoiceReply(action);
+        break;
+    }
+  }
+
+  SavedConnection? _connectionForLaunchAction(LaunchAction action) {
+    String? id;
+    final json = action.connectionJson;
+    if (json != null && json.isNotEmpty) {
+      try {
+        final map = jsonDecode(json) as Map<String, dynamic>;
+        id = map['id'] as String?;
+      } catch (_) {
+        // Fall through to default connection selection.
+      }
+    }
+    if (id != null && id.isNotEmpty) {
+      final match = _connections.where((c) => c.id == id).firstOrNull;
+      if (match != null) return match;
+    }
+    return _connectionForExternalAction();
+  }
+
+  void _handleNewChat(LaunchAction action) {
+    final connection = _connectionForLaunchAction(action);
+    if (connection == null) return;
+    _autoNavigated = true;
+    _navigateToWorkspace(connection);
+  }
+
+  Future<void> _handleVoiceReply(LaunchAction action) async {
+    final sessionId = action.sessionId;
+    final message = action.message;
+    debugPrint('[HermesAuto] _handleVoiceReply sessionId=$sessionId message=$message');
+    if (sessionId == null ||
+        sessionId.isEmpty ||
+        message == null ||
+        message.isEmpty) {
+      return;
+    }
+    final connection = _connectionForLaunchAction(action);
+    debugPrint('[HermesAuto] _handleVoiceReply connection=${connection?.id}');
+    if (connection == null) return;
+    _autoNavigated = true;
+
+    // The persistent "start new conversation" notification replies on the
+    // __new__ sentinel. It is not a real session id, so resolve it to a fresh
+    // quick-chat session and send the reply there.
+    if (sessionId == '__new__') {
+      final now = DateTime.now();
+      final fresh = Session(
+        id: GatewayChatClient.generateSessionId(),
+        title: 'Quick chat',
+        model: kDefaultChatModel,
+        source: 'mobile',
+        messageCount: 0,
+        isActive: true,
+        preview: '',
+        startedAt: now.millisecondsSinceEpoch / 1000.0,
+        isLocalDraft: true,
+      );
+      unawaited(
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ChatScreen(
+              connection: connection,
+              session: fresh,
+              turnApplicationController: widget.turnApplicationController,
+              initialVoiceReply: message,
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    final client = ApiClient.forConnection(connection);
+    final session = await client
+        .getSessionById(sessionId)
+        .catchError((Object _) => null);
+    debugPrint('[HermesAuto] _handleVoiceReply resolved session=${session?.id}');
+    if (!mounted) return;
+    if (session == null) {
+      _navigateToWorkspace(connection);
+      return;
+    }
+    unawaited(
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            connection: connection,
+            session: session,
+            turnApplicationController: widget.turnApplicationController,
+            initialVoiceReply: message,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     widget.shareIntents?.pendingShare.removeListener(_onSharedText);
     widget.launchIntents?.pendingQuickChat.removeListener(_onQuickChat);
+    widget.launchIntents?.pendingAction.removeListener(_onLaunchAction);
     super.dispose();
   }
 
@@ -1585,7 +1928,8 @@ class HomeScreenState extends State<HomeScreen> {
     // The share listener owns this route so the regular last-connection
     // auto-navigation cannot stack a second Workspace above the shared draft.
     if (widget.shareIntents?.pendingShare.value != null ||
-        widget.launchIntents?.pendingQuickChat.value == true) {
+        widget.launchIntents?.pendingQuickChat.value == true ||
+        widget.launchIntents?.pendingAction.value != null) {
       return;
     }
     final lastId = widget.connManager.prefs.getString(_lastConnectionKey);

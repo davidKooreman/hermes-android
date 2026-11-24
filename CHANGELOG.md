@@ -24,6 +24,15 @@ Stable release `4.0.0+3048`, with release APK codes `30481`, `30482` and
 and above 3.2.8. This release covers all changes since 3.2.8. The production
 package and signing key are unchanged, so it installs over the existing app.
 
+### Fixed (4.0.0+3070021, 2026-11-24)
+
+- **Android Auto voice replies now arrive and are spoken back.** Voice-reply
+  launch actions are handled at the app root (`HermesAppState`), so a reply
+  works even when the app is already on another screen, and the auto-send now
+  sets `speakResponse: true` so the assistant answer is read aloud. The
+  persistent "start new conversation" sentinel (`__new__`) is resolved to a
+  fresh quick-chat session instead of an invalid session lookup.
+
 ### Added
 
 - **Hermes Android is now Ares.** The app is named "Ares - formerly Hermes

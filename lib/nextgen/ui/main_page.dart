@@ -338,7 +338,7 @@ class _NgMainPageState extends State<NgMainPage> with WidgetsBindingObserver {
         'reply',
         label,
         'skipped',
-        'Ares was on screen',
+        'Hermes was on screen',
       );
       return;
     }

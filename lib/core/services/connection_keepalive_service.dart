@@ -21,18 +21,34 @@ class ConnectionKeepAliveService {
   bool _pendingStart = false;
   int _cycle = 0;
   final Set<Future<void>> _stops = {};
+  Timer? _debounceTimer;
 
   bool get isActive => _active;
 
+  /// Starts the foreground service. Coalesces rapid start/stop calls so the
+  /// native side does not receive a start immediately followed by a stop,
+  /// which can trigger a foreground-service timeout crash.
   Future<void> start() async {
     if (!_enabled) return;
     _desiredActive = true;
+    _pendingStart = true;
+    if (_debounceTimer?.isActive ?? false) return;
+
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 300), () async {
+      await _doStart();
+    });
+  }
+
+  Future<void> _doStart() async {
+    if (!_desiredActive || !_enabled) return;
     if (_active && _stops.isEmpty) return;
     if (_starting) {
       _pendingStart = true;
       return;
     }
     _starting = true;
+    _pendingStart = false;
     try {
       // A newly earned start must follow every older native stop, including
       // a compensating stop for a stale start. Native replies can be delayed.
@@ -51,7 +67,6 @@ class ConnectionKeepAliveService {
       }
       if (cycle == _cycle && _desiredActive && _enabled) {
         _active = started;
-        _pendingStart = false;
       } else if (started) {
         // A stop may have reached Android before this stale start did. Keep
         // the flight until its compensation completes so no newer start can
@@ -60,13 +75,16 @@ class ConnectionKeepAliveService {
       }
     } finally {
       _starting = false;
-      final retry = _pendingStart && _desiredActive && _enabled;
-      _pendingStart = false;
-      if (retry) await start();
+      if (_pendingStart && _desiredActive && _enabled) {
+        _pendingStart = false;
+        await _doStart();
+      }
     }
   }
 
   Future<void> stop() async {
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
     _cycle++;
     _desiredActive = false;
     _pendingStart = false;

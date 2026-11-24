@@ -28,6 +28,7 @@ import 'package:share_plus/share_plus.dart';
 import '../controllers/slash_command_controller.dart';
 import '../controllers/voice_composer_controller.dart';
 import '../controllers/voice_recording_controller.dart';
+import '../services/auto_messaging_service.dart';
 import '../services/local_voice_recorder.dart';
 import '../services/voice_transcription.dart';
 import '../widgets/voice_recording_controls.dart';
@@ -551,6 +552,10 @@ class ChatScreen extends StatefulWidget {
   /// composer; sending remains an explicit user action.
   final String? initialComposerText;
 
+  /// Text supplied by an Android Auto voice reply. It is sent automatically
+  /// once the chat is initialized.
+  final String? initialVoiceReply;
+
   /// Validated app-private files supplied by Android's share sheet.
   final List<AttachmentDraft> initialAttachmentDrafts;
 
@@ -653,6 +658,7 @@ class ChatScreen extends StatefulWidget {
     this.projectName,
     this.projectWorkingDirectory,
     this.initialComposerText,
+    this.initialVoiceReply,
     this.initialAttachmentDrafts = const [],
     this.turnApplicationController,
     this.testTurnApplicationSession,
@@ -1100,7 +1106,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     unawaited(_refreshProjectName());
     unawaited(_refreshArchiveState());
-    unawaited(_initializeChat());
+    unawaited(_initChatAndMaybeSendVoiceReply());
     _loadVerboseMode();
     _loadChatDensity();
     chatDensitySelection.addListener(_onChatDensityChanged);
@@ -1904,6 +1910,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     await _fetchMessages();
     if (!mounted) return;
     await _recoverPendingTurn(allowLegacyFallback: true);
+  }
+
+  /// Android Auto voice replies arrive as text that must be sent without
+  /// waiting for the user to press the composer button. Prefill the composer
+  /// after history is ready and submit the message.
+  Future<void> _initChatAndMaybeSendVoiceReply() async {
+    await _initializeChat();
+    if (!mounted || widget.initialVoiceReply == null) return;
+    final text = widget.initialVoiceReply!;
+    _textController.text = text;
+    _textController.selection = TextSelection.collapsed(offset: text.length);
+    // Android Auto replies are spoken back to the car, so mark the send as
+    // voice-originated; otherwise _awaitingVoiceReply stays false and the
+    // assistant answer is never read aloud.
+    await _sendMessage(speakResponse: true);
   }
 
   /// Desktop gateway connection-state transitions.
@@ -5588,6 +5609,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           }
         }
       });
+      if (completeText.trim().isNotEmpty) {
+        unawaited(
+          AutoMessagingService.showAssistantMessage(
+            sessionId: widget.session.id,
+            title: _sessionTitle,
+            body: completeText.trim(),
+            connectionJson: AutoMessagingService.safeConnectionJson(
+              widget.connection,
+            ),
+          ).catchError((Object _) {}),
+        );
+      }
       if (completeText.isNotEmpty) {
         _scheduleStreamingFollow();
       }
@@ -8720,7 +8753,7 @@ class MessageBubble extends StatelessWidget {
                   icon: Icons.flag_outlined,
                   onTap: () {
                     Navigator.of(sheetContext).pop();
-                    unawaited(reportAresAiOutput());
+                    unawaited(reportHermesAiOutput());
                   },
                 ),
               if (onReadAloud != null)

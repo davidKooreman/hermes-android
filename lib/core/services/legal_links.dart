@@ -12,15 +12,15 @@ final Uri aresAiOutputReportUri = Uri.https(
   'github.com',
   '/rusty4444/hermes-android/issues/new',
   <String, String>{
-    'title': 'Ares AI output report',
+    'title': 'Hermes AI output report',
     'body':
         'Describe the AI output and why it was unsafe or offensive. '
         'Do not include private chats, credentials, personal data or attachment paths.',
   },
 );
 
-Future<bool> openAresPrivacyPolicy() =>
+Future<bool> openHermesPrivacyPolicy() =>
     launchUrl(aresPrivacyPolicyUri, mode: LaunchMode.externalApplication);
 
-Future<bool> reportAresAiOutput() =>
+Future<bool> reportHermesAiOutput() =>
     launchUrl(aresAiOutputReportUri, mode: LaunchMode.externalApplication);

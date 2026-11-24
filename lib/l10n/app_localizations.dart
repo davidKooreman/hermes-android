@@ -413,7 +413,7 @@ abstract class AppLocalizations {
   /// No description provided for @setup_interface_classic_description.
   ///
   /// In en, this message translates to:
-  /// **'The original Ares workspace, with full connection controls and every Classic setting.'**
+  /// **'The original Hermes workspace, with full connection controls and every Classic setting.'**
   String get setup_interface_classic_description;
 
   /// No description provided for @setup_interface_nextgen_description.
@@ -2553,13 +2553,13 @@ abstract class AppLocalizations {
   /// No description provided for @hermes_agent.
   ///
   /// In en, this message translates to:
-  /// **'Ares - formerly Hermes Android'**
+  /// **'Hermes Agent'**
   String get hermes_agent;
 
   /// No description provided for @hermes_agent_for_android.
   ///
   /// In en, this message translates to:
-  /// **'Ares - formerly Hermes Android'**
+  /// **'Hermes Agent'**
   String get hermes_agent_for_android;
 
   /// No description provided for @hermes_could_not_accept_the_answer_please_try_again.
@@ -2595,7 +2595,7 @@ abstract class AppLocalizations {
   /// No description provided for @hermes_keeps_android_accessibility_text_scaling_active.
   ///
   /// In en, this message translates to:
-  /// **'Ares keeps Android accessibility text scaling active.'**
+  /// **'Hermes keeps Android accessibility text scaling active.'**
   String get hermes_keeps_android_accessibility_text_scaling_active;
 
   /// No description provided for @hermes_needs_your_input.
@@ -5426,7 +5426,7 @@ abstract class AppLocalizations {
   /// No description provided for @a_newer_hermes_android_build_is_available_on_github.
   ///
   /// In en, this message translates to:
-  /// **'A newer Ares build is available on GitHub.'**
+  /// **'A newer Hermes build is available on GitHub.'**
   String get a_newer_hermes_android_build_is_available_on_github;
 
   /// No description provided for @release_notes.
@@ -7725,7 +7725,7 @@ abstract class AppLocalizations {
   /// No description provided for @ng_welcome_to_hermes.
   ///
   /// In en, this message translates to:
-  /// **'Welcome to Ares'**
+  /// **'Welcome to Hermes'**
   String get ng_welcome_to_hermes;
 
   /// No description provided for @ng_add_a_gateway.
@@ -9573,7 +9573,7 @@ abstract class AppLocalizations {
   /// No description provided for @ng_notifications_hint.
   ///
   /// In en, this message translates to:
-  /// **'Replies and requests while Ares is in the background'**
+  /// **'Replies and requests while Hermes is in the background'**
   String get ng_notifications_hint;
 
   /// No description provided for @ng_notify_replies.
@@ -9621,7 +9621,7 @@ abstract class AppLocalizations {
   /// No description provided for @ng_battery_settings_hint.
   ///
   /// In en, this message translates to:
-  /// **'Let Ares run in the background so notifications arrive on time'**
+  /// **'Let Hermes run in the background so notifications arrive on time'**
   String get ng_battery_settings_hint;
 
   /// No description provided for @ng_send_test_notification.
@@ -9633,7 +9633,7 @@ abstract class AppLocalizations {
   /// No description provided for @ng_test_notification_title.
   ///
   /// In en, this message translates to:
-  /// **'Ares notifications work'**
+  /// **'Hermes notifications work'**
   String get ng_test_notification_title;
 
   /// No description provided for @ng_test_notification_body.
@@ -9657,7 +9657,7 @@ abstract class AppLocalizations {
   /// No description provided for @ng_notifications_off_hint.
   ///
   /// In en, this message translates to:
-  /// **'Notifications are off, so nothing is posted while Ares is in the background.'**
+  /// **'Notifications are off, so nothing is posted while Hermes is in the background.'**
   String get ng_notifications_off_hint;
 
   /// No description provided for @ng_insights_building.
@@ -9753,7 +9753,7 @@ abstract class AppLocalizations {
   /// No description provided for @ng_recent_notifications_hint.
   ///
   /// In en, this message translates to:
-  /// **'What Ares tried to post and whether Android showed it'**
+  /// **'What Hermes tried to post and whether Android showed it'**
   String get ng_recent_notifications_hint;
 
   /// No description provided for @ng_recent_notifications_empty.

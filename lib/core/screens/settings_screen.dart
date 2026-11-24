@@ -430,7 +430,7 @@ class _AboutCardState extends State<_AboutCard> {
               contentPadding: EdgeInsets.zero,
               title: Text(context.l10n.privacy_policy),
               trailing: const Icon(Icons.open_in_new),
-              onTap: openAresPrivacyPolicy,
+              onTap: openHermesPrivacyPolicy,
             ),
             ListTile(
               contentPadding: EdgeInsets.zero,

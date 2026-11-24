@@ -13,6 +13,7 @@ val minimumInstalledVersionCode = 2127
 // Google Play builds use Play-managed updates. The ordinary GitHub release keeps
 // its verified APK updater. CI sets this only for the separate Play AAB.
 val playBuild = System.getenv("ARES_PLAY_BUILD") == "true"
+val hermesBuild = !playBuild
 if (keystorePath.exists()) {
    keystoreProperties.load(FileInputStream(keystorePath))
 }
@@ -164,6 +165,9 @@ tasks.matching { it.name == "preBuild" || it.name.startsWith("merge") && it.name
 }
 
 dependencies {
+   implementation("androidx.car.app:app:1.7.0")
+   implementation("com.squareup.okhttp3:okhttp:4.12.0")
+   implementation("androidx.lifecycle:lifecycle-common-java8:2.8.7")
    implementation(voiceAar)
    // Open-source C2DM IPC transport, not Firebase SDK/GMS client libraries.
    val replacementEmbeddedPushAar = providers.gradleProperty("embeddedPushAar").orNull
