@@ -2,4 +2,25 @@
 <resources>
     <string name="shortcut_quick_chat_short">New Quick Chat</string>
     <string name="shortcut_quick_chat_long">Start a new Ares Quick Chat</string>
+    <string name="new_chat_title">Ares</string>
+    <string name="new_chat_body_short">Tap to start a new chat</string>
+    <string name="user_name">You</string>
+    <string name="reply_action_label">Reply</string>
+    <string name="voice_reply_label">Voice reply</string>
+    <string name="mark_as_read_label">Mark as read</string>
+    <string name="foreground_title">Ares</string>
+    <string name="foreground_body">Keeping chat alive in the background</string>
+    <string name="voice_status_listening">Luisteren…</string>
+    <string name="voice_status_speak_now">Spreek nu</string>
+    <string name="voice_status_processing">Verwerken…</string>
+    <string name="voice_error_audio">Microfoon probleem</string>
+    <string name="voice_error_client">Spraakherkenning onderbroken</string>
+    <string name="voice_error_permission">Microfoon toestemming ontbreekt</string>
+    <string name="voice_error_network">Netwerk probleem</string>
+    <string name="voice_error_no_match">Niks verstaan</string>
+    <string name="voice_error_busy">Spraakherkenning bezet</string>
+    <string name="voice_error_server">Server probleem</string>
+    <string name="voice_error_no_speech">Geen spraak gehoord</string>
+    <string name="voice_error_unknown">Fout bij spraakherkenning</string>
+    <string name="voice_service_description">Ares plakt herkende spraaktekst in het actieve invoerveld.</string>
 </resources>

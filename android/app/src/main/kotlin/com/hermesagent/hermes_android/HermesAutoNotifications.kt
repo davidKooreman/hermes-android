@@ -7,160 +7,321 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
-import org.json.JSONObject
-import java.util.UUID
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
+import io.flutter.plugin.common.MethodChannel
 
-/** Notification/reply-only Android Auto integration. Tokens contain no credentials.
- * Action text and provenance use the existing Keystore-sealed native store.
- * No Activity, microphone, TTS, boot listener, sticky service or raw network client. */
-internal object HermesAutoNotifications {
-    const val REPLY = "com.hermesagent.hermes_android.AUTO_REPLY"
-    const val READ = "com.hermesagent.hermes_android.AUTO_READ"
-    const val OPEN = "com.hermesagent.hermes_android.AUTO_OPEN"
-    private const val RECORDS = "auto_notifications"
-    private const val CHANNEL = "hermes_auto_messaging"
-    private fun now() = System.currentTimeMillis() / 1000
-    private fun manager(c: Context) = c.getSystemService(NotificationManager::class.java)
-    private fun policy(c: Context): Boolean {
-        if (!manager(c).areNotificationsEnabled()) return false
-        val raw = c.getSharedPreferences("FlutterSharedPreferences", 0).getString("flutter.hermes_notification_prefs", null)
-        val prefs = if (raw == null) JSONObject() else runCatching { JSONObject(raw) }.getOrNull() ?: return false
-        return prefs.optBoolean("enabled", true) && (prefs.optJSONObject("kinds")?.optBoolean("turnDone", true) != false)
-    }
-    private fun records(state: JSONObject) = state.optJSONObject(RECORDS) ?: JSONObject().also { state.put(RECORDS, it) }
-    private fun valid(c: Context, row: JSONObject) = row.optLong("expires") > now() && policy(c) &&
-        MobilePushBridge.autoAccountCurrent(c, row.optString("connectionId"), row.optJSONObject("metadata"))
+/**
+ * Notification service helper for Android Auto.
+ * Creates a persistent "start new conversation" entry and per-session
+ * conversation notifications with voice reply actions.
+ *
+ * Keeps the most recent connection JSON in SharedPreferences so receivers
+ * can start a foreground service and forward replies even when the app
+ * process is not running.
+ */
+object HermesAutoNotifications {
 
-    fun ticket(c: Context, args: Map<*, *>): Long? = synchronized(MobilePushBridge) {
-        val metadata = args["metadata"] as? Map<*, *> ?: return null
-        if (!MobilePushBridge.autoAccountCurrent(c, args["connectionId"] as? String ?: return null, JSONObject(metadata))) return null
-        MobilePushStore.read(c).optLong("auto_epoch")
-    }
-    fun post(c: Context, args: Map<*, *>): Boolean = synchronized(MobilePushBridge) {
-        val connection = args["connectionId"] as? String ?: return false
-        val session = args["sessionId"] as? String ?: return false
-        val binding = args["binding"] as? String ?: return false
-        val metadata = args["metadata"] as? Map<*, *> ?: return false
-        val id = (args["id"] as? Number)?.toInt() ?: return false
-        if (id !in 0x10000000..0x1fffffff || !session.matches(Regex("[A-Za-z0-9_.:@-]{1,200}")) ||
-            session == "__new__" || binding.isEmpty() || !policy(c) ||
-            !MobilePushBridge.autoAccountCurrent(c, connection, JSONObject(metadata))) return false
-        val token = UUID.randomUUID().toString()
-        val state = MobilePushStore.read(c)
-        if ((args["ticket"] as? Number)?.toLong() != state.optLong("auto_epoch")) return false
-        val rows = records(state)
-        rows.keys().asSequence().toList().forEach { key ->
-            val old = rows.getJSONObject(key)
-            if (old.optLong("expires") <= now() || old.optInt("id") == id) rows.remove(key)
+    private const val CHANNEL_ID = "hermes_auto_messaging"
+    private const val NEW_CHAT_NOTIFICATION_ID = 1001
+    private const val PREFS_NAME = "hermes_auto"
+    private const val PREF_LAST_CONNECTION_JSON = "last_connection_json"
+
+    const val ACTION_VOICE_REPLY = "com.hermesagent.hermes_android.VOICE_REPLY"
+    const val ACTION_NEW_CHAT = "com.hermesagent.hermes_android.NEW_CHAT"
+    const val ACTION_MARK_AS_READ = "com.hermesagent.hermes_android.MARK_AS_READ"
+    const val EXTRA_SESSION_ID = "session_id"
+    const val EXTRA_CONNECTION_JSON = "connection_json"
+    const val KEY_VOICE_REPLY = "voice_reply"
+
+    const val NEW_SESSION_SENTINEL = "__new__"
+
+    private val sessionNotificationIds = mutableMapOf<String, Int>()
+    private var nextSessionNotificationId = 2000
+
+    private fun getSessionNotificationId(sessionId: String): Int {
+        return sessionNotificationIds.getOrPut(sessionId) {
+            nextSessionNotificationId++
         }
-        // Bound sealed storage; expiry/single-use prevent delayed automatic replay.
-        while (rows.length() >= 64) rows.remove(rows.keys().next())
-        rows.put(token, JSONObject().put("connectionId", connection).put("sessionId", session)
-            .put("binding", binding).put("metadata", JSONObject(metadata)).put("id", id)
-            .put("expires", now() + 1800).put("status", "issued"))
-        MobilePushStore.write(c, state) // write authority BEFORE exposing PendingIntents
-        val mutable = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
-        fun action(kind: String, flags: Int) = PendingIntent.getBroadcast(c, 0,
-            Intent(c, AutoMessageReceiver::class.java).setAction(kind).setData(Uri.parse("ares-auto://action/$token")),
-            PendingIntent.FLAG_UPDATE_CURRENT or flags)
-        val replyLabel = (args["replyLabel"] as? String) ?: "Reply"
-        val readLabel = (args["readLabel"] as? String) ?: "Mark as read"
-        val userLabel = (args["userLabel"] as? String) ?: "You"
-        val remote = RemoteInput.Builder("reply").setLabel(replyLabel).build()
-        val reply = action(REPLY, mutable)
-        val read = action(READ, PendingIntent.FLAG_IMMUTABLE)
-        val open = PendingIntent.getActivity(c, 0,
-            Intent(c, MainActivity::class.java).setAction(OPEN).setData(Uri.parse("ares-auto://action/$token")),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val title = (args["title"] as? String).orEmpty().take(256)
-        val body = (args["body"] as? String).orEmpty().take(16000)
-        if (Build.VERSION.SDK_INT >= 26) manager(c).createNotificationChannel(NotificationChannel(
-            CHANNEL, (args["channelLabel"] as? String) ?: "Ares conversations", NotificationManager.IMPORTANCE_DEFAULT))
-        val style = NotificationCompat.MessagingStyle(Person.Builder().setName(userLabel).build())
-            .setConversationTitle(title).setGroupConversation(false)
-            .addMessage(body, System.currentTimeMillis(), Person.Builder().setName("Ares").setKey("assistant").build())
-        val replyAction = NotificationCompat.Action.Builder(android.R.drawable.ic_btn_speak_now, replyLabel, reply)
-            .addRemoteInput(remote).setAllowGeneratedReplies(true).setShowsUserInterface(false)
-            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY).build()
-        val readAction = NotificationCompat.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, readLabel, read)
-            .setShowsUserInterface(false).setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ).build()
-        val car = NotificationCompat.CarExtender.UnreadConversation.Builder("Ares").addMessage(body)
-            .setReadPendingIntent(read).setReplyAction(reply, remote).setLatestTimestamp(System.currentTimeMillis()).build()
-        manager(c).notify(id, NotificationCompat.Builder(c, CHANNEL).setSmallIcon(R.drawable.ic_stat_mobile_push)
-            .setContentTitle(title).setContentText(body).setStyle(style).setContentIntent(open)
-            .setCategory(Notification.CATEGORY_MESSAGE).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setAutoCancel(true).addAction(replyAction).addAction(readAction)
-            .extend(NotificationCompat.CarExtender().setUnreadConversation(car)).build())
-        true
     }
 
-    fun receive(c: Context, intent: Intent): Unit = synchronized(MobilePushBridge) {
-        if (intent.action !in listOf(REPLY, READ, OPEN)) return
-        val token = intent.data?.takeIf { it.scheme == "ares-auto" && it.host == "action" }?.lastPathSegment ?: return
-        val state = MobilePushStore.read(c)
-        val row = records(state).optJSONObject(token) ?: return
-        if (row.optString("status") != "issued" || !valid(c, row)) return
-        val text = if (intent.action == REPLY) RemoteInput.getResultsFromIntent(intent)?.getCharSequence("reply")?.toString() else null
-        if (intent.action == REPLY && (text.isNullOrBlank() || text.length > 16000)) return
-        row.put("status", "pending").put("kind", when (intent.action) { REPLY -> "reply"; READ -> "read"; else -> "open" })
-        if (text != null) row.put("text", text)
-        MobilePushStore.write(c, state)
-        manager(c).cancel(row.getInt("id"))
-        AutoMessagingPlugin.changed()
-    }
-    fun claim(c: Context): Map<String, Any?>? = synchronized(MobilePushBridge) {
-        val state = MobilePushStore.read(c)
-        val rows = records(state)
-        for (token in rows.keys()) {
-            val row = rows.getJSONObject(token)
-            if (row.optString("status") != "pending" || !valid(c, row)) continue
-            val result = mapOf("token" to token, "connectionId" to row.getString("connectionId"),
-                "sessionId" to row.getString("sessionId"), "binding" to row.getString("binding"),
-                "kind" to row.getString("kind"), "text" to row.optString("text"))
-            // Lost acknowledgement is intentionally not retried: delivery is uncertain.
-            row.put("status", "claimed").remove("text")
-            MobilePushStore.write(c, state)
-            return result
+    private fun createChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (manager.getNotificationChannel(CHANNEL_ID) != null) return
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Hermes Agent",
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Android Auto conversations and new chat entry"
+            setShowBadge(false)
         }
-        null
+        manager.createNotificationChannel(channel)
     }
-    fun current(c: Context, token: String): Boolean = synchronized(MobilePushBridge) {
-        val row = records(MobilePushStore.read(c)).optJSONObject(token) ?: return false
-        row.optString("status") == "claimed" && valid(c, row)
-    }
-    fun cancel(c: Context, id: Int): Unit = synchronized(MobilePushBridge) {
-        val state = MobilePushStore.read(c); val rows = records(state)
-        // Invalidate outstanding post tickets before cleanup, even if this ID
-        // has not reached notify() yet. Existing sibling records remain valid.
-        state.put("auto_epoch", state.optLong("auto_epoch") + 1)
-        rows.keys().asSequence().toList().forEach { key -> if (rows.getJSONObject(key).optInt("id") == id) rows.remove(key) }
-        MobilePushStore.write(c, state)
-        manager(c).cancel(id)
-    }
-    fun finish(c: Context, token: String) = synchronized(MobilePushBridge) {
-        val state = MobilePushStore.read(c); records(state).remove(token); MobilePushStore.write(c, state)
-    }
-    fun invalidate(c: Context, ids: Set<String>? = null) = synchronized(MobilePushBridge) {
-        val state = MobilePushStore.read(c); val rows = records(state)
-        state.put("auto_epoch", state.optLong("auto_epoch") + 1)
-        val cancelled = mutableListOf<Int>()
-        rows.keys().asSequence().toList().forEach { key ->
-            val row = rows.getJSONObject(key)
-            if (ids == null || row.optString("connectionId") in ids) { cancelled.add(row.optInt("id")); rows.remove(key) }
-        }
-        MobilePushStore.write(c, state) // durable revocation before fallible display cleanup
-        cancelled.forEach { manager(c).cancel(it) }
-    }
-}
 
-/** Broadcast delivery never launches the phone UI or blindly starts a Flutter isolate.
- * A live app drains immediately; after process death, a sealed pending action waits
- * for ordinary foreground startup, subject to the same expiry/revocation checks. */
-class AutoMessageReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) { runCatching { HermesAutoNotifications.receive(context, intent) } }
-}
+    private fun rememberConnectionJson(context: Context, connectionJson: String) {
+        if (connectionJson.isEmpty()) return
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREF_LAST_CONNECTION_JSON, connectionJson)
+            .apply()
+    }
+
+    internal fun getConnectionJson(context: Context, connectionJson: String?): String {
+        if (!connectionJson.isNullOrEmpty()) return connectionJson
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(PREF_LAST_CONNECTION_JSON, "") ?: ""
+    }
+
+    private fun showNotification(context: Context, connectionJson: String, force: Boolean) {
+        createChannel(context)
+
+        val tapIntent = PendingIntent.getActivity(
+            context,
+            3,
+            Intent(context, MainActivity::class.java).apply {
+                action = ACTION_NEW_CHAT
+                putExtra("new_chat", true)
+                putExtra(EXTRA_CONNECTION_JSON, connectionJson)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val replyIntent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_VOICE_REPLY
+            putExtra(EXTRA_SESSION_ID, NEW_SESSION_SENTINEL)
+            putExtra(EXTRA_CONNECTION_JSON, connectionJson)
+        }
+        val replyPendingIntent = PendingIntent.getActivity(
+            context,
+            4,
+            replyIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+        )
+        val remoteInput = RemoteInput.Builder(KEY_VOICE_REPLY)
+            .setLabel(context.getString(R.string.voice_reply_label))
+            .build()
+        val replyAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_btn_speak_now,
+            context.getString(R.string.reply_action_label),
+            replyPendingIntent,
+        )
+            .addRemoteInput(remoteInput)
+            .setAllowGeneratedReplies(false)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+            .build()
+
+        val user = Person.Builder()
+            .setName(context.getString(R.string.user_name))
+            .setKey("user")
+            .build()
+
+        val hermes = Person.Builder()
+            .setName(context.getString(R.string.new_chat_title))
+            .setKey("hermes")
+            .setImportant(true)
+            .build()
+
+        val style = NotificationCompat.MessagingStyle(user)
+            .setConversationTitle(context.getString(R.string.new_chat_title))
+            .addMessage(
+                NotificationCompat.MessagingStyle.Message(
+                    context.getString(R.string.new_chat_body_short),
+                    System.currentTimeMillis(),
+                    hermes,
+                ),
+            )
+            .setGroupConversation(false)
+
+        // Android Auto specific unread conversation so the car shows it as a message thread.
+        val unreadConversation = NotificationCompat.CarExtender.UnreadConversation.Builder(
+            context.getString(R.string.new_chat_title),
+        )
+            .addMessage(context.getString(R.string.new_chat_body_short))
+            .setReadPendingIntent(tapIntent)
+            .setReplyAction(replyPendingIntent, remoteInput)
+            .setLatestTimestamp(System.currentTimeMillis())
+            .build()
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_hermes)
+            .setContentTitle(context.getString(R.string.new_chat_title))
+            .setContentText(context.getString(R.string.new_chat_body_short))
+            .setStyle(style)
+            .setContentIntent(tapIntent)
+            .setAutoCancel(false)
+            .setOngoing(true)
+            .setSilent(false)
+            .setCategory(Notification.CATEGORY_MESSAGE)
+            .setShowWhen(true)
+            .setWhen(System.currentTimeMillis())
+            .setOnlyAlertOnce(false)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(replyAction)
+            .extend(NotificationCompat.CarExtender().setUnreadConversation(unreadConversation))
+            .build()
+
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NEW_CHAT_NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * Public entry used by Dart. Re-posts the entry so Android Auto surfaces it
+     * and remembers the connection so the service can recover after app death.
+     */
+    fun showNewChatEntry(context: Context, connectionJson: String) {
+        rememberConnectionJson(context, connectionJson)
+        showNotification(context, connectionJson, force = true)
+    }
+
+    /**
+     * Internal re-post when the receiver detects the app becoming foreground.
+     */
+    fun refreshNewChatEntry(context: Context, connectionJson: String) {
+        rememberConnectionJson(context, connectionJson)
+        showNotification(context, connectionJson, force = true)
+    }
+
+    fun showAssistantMessage(
+        context: Context,
+        sessionId: String,
+        title: String,
+        body: String,
+        connectionJson: String,
+    ) {
+        rememberConnectionJson(context, connectionJson)
+        createChannel(context)
+
+        val replyIntent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_VOICE_REPLY
+            putExtra(EXTRA_SESSION_ID, sessionId)
+            putExtra(EXTRA_CONNECTION_JSON, connectionJson)
+        }
+        val replyPendingIntent = PendingIntent.getActivity(
+            context,
+            sessionId.hashCode(),
+            replyIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+        )
+
+        val remoteInput = RemoteInput.Builder(KEY_VOICE_REPLY)
+            .setLabel(context.getString(R.string.voice_reply_label))
+            .build()
+        val replyAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_btn_speak_now,
+            context.getString(R.string.reply_action_label),
+            replyPendingIntent,
+        )
+            .addRemoteInput(remoteInput)
+            .setAllowGeneratedReplies(false)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+            .setShowsUserInterface(false)
+            .build()
+
+        val markAsReadIntent = Intent(context, MessageReadReceiver::class.java).apply {
+            action = ACTION_MARK_AS_READ
+            putExtra(EXTRA_SESSION_ID, sessionId)
+        }
+        val markAsReadPendingIntent = PendingIntent.getBroadcast(
+            context,
+            sessionId.hashCode(),
+            markAsReadIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val markAsReadAction = NotificationCompat.Action.Builder(
+            android.R.drawable.ic_menu_close_clear_cancel,
+            context.getString(R.string.mark_as_read_label),
+            markAsReadPendingIntent,
+        )
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
+            .setShowsUserInterface(false)
+            .build()
+
+        val user = Person.Builder()
+            .setName(context.getString(R.string.user_name))
+            .setKey("user")
+            .build()
+
+        val assistant = Person.Builder()
+            .setName(title)
+            .setKey("assistant_$sessionId")
+            .build()
+
+        val message = NotificationCompat.MessagingStyle.Message(
+            body,
+            System.currentTimeMillis(),
+            assistant,
+        )
+
+        val messagingStyle = NotificationCompat.MessagingStyle(user)
+            .setConversationTitle(title)
+            .addMessage(message)
+            .setGroupConversation(false)
+
+        val contentIntent = PendingIntent.getActivity(
+            context,
+            sessionId.hashCode(),
+            Intent(context, MainActivity::class.java).apply {
+                action = ACTION_VOICE_REPLY
+                putExtra(EXTRA_SESSION_ID, sessionId)
+                putExtra(EXTRA_CONNECTION_JSON, connectionJson)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val assistantLargeIcon = context.packageManager
+            .getApplicationIcon(context.packageName)
+            .let { drawable ->
+                if (drawable is android.graphics.drawable.BitmapDrawable) drawable.bitmap
+                else null
+            }
+
+        val unreadConversation = NotificationCompat.CarExtender.UnreadConversation.Builder(
+            title,
+        )
+            .addMessage(body)
+            .setReadPendingIntent(markAsReadPendingIntent)
+            .setReplyAction(replyPendingIntent, remoteInput)
+            .setLatestTimestamp(System.currentTimeMillis())
+            .build()
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_stat_hermes)
+            .setLargeIcon(assistantLargeIcon)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(messagingStyle)
+            .setContentIntent(contentIntent)
+            .setAutoCancel(true)
+            .setOngoing(false)
+            .setSilent(false)
+            .setWhen(System.currentTimeMillis())
+            .addAction(replyAction)
+            .addAction(markAsReadAction)
+            .setCategory(Notification.CATEGORY_MESSAGE)
+            .setOnlyAlertOnce(false)
+            .setShowWhen(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .extend(NotificationCompat.CarExtender().setUnreadConversation(unreadConversation))
+            .build()
+
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancel(NEW_CHAT_NOTIFICATION_ID)
+        val notificationId = getSessionNotificationId(sessionId)
+        sessionNotificationIds[sessionId] = notificationId
+        manager.notify(notificationId, notification)
+    }
+
+    fun cancelSessionNotification(context: Context, sessionId: String) {
+        val id = sessionNotificationIds[sessionId] ?: return
+        val manager = androidx.core.app.NotificationManagerCompat.from(context)
+        manager.cancel(id)
+    }
+ }

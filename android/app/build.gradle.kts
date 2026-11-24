@@ -167,6 +167,9 @@ tasks.matching { it.name == "preBuild" || it.name.startsWith("merge") && it.name
 }
 
 dependencies {
+   implementation("androidx.car.app:app:1.7.0")
+   implementation("com.squareup.okhttp3:okhttp:4.12.0")
+   implementation("androidx.lifecycle:lifecycle-common-java8:2.8.7")
    implementation(voiceAar)
    // Open-source C2DM IPC transport, not Firebase SDK/GMS client libraries.
    val replacementEmbeddedPushAar = providers.gradleProperty("embeddedPushAar").orNull

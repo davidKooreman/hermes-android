@@ -553,6 +553,10 @@ class ChatScreen extends StatefulWidget {
   /// composer; sending remains an explicit user action.
   final String? initialComposerText;
 
+  /// Android Auto voice-reply text that must be sent automatically once the
+  /// chat is initialised. Used only by the launch-action fallback path.
+  final String? initialVoiceReply;
+
   /// Validated app-private files supplied by Android's share sheet.
   final List<AttachmentDraft> initialAttachmentDrafts;
 
@@ -655,6 +659,7 @@ class ChatScreen extends StatefulWidget {
     this.projectName,
     this.projectWorkingDirectory,
     this.initialComposerText,
+    this.initialVoiceReply,
     this.initialAttachmentDrafts = const [],
     this.turnApplicationController,
     this.testTurnApplicationSession,
@@ -1923,6 +1928,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     await _fetchMessages();
     if (!mounted) return;
     await _recoverPendingTurn(allowLegacyFallback: true);
+    if (!mounted || widget.initialVoiceReply == null) return;
+    final text = widget.initialVoiceReply!;
+    _textController.text = text;
+    _textController.selection = TextSelection.collapsed(offset: text.length);
+    // Android Auto replies are spoken back to the car, so mark the send as
+    // voice-originated; otherwise _awaitingVoiceReply stays false and the
+    // assistant answer is never read aloud.
+    await _sendMessage(speakResponse: true);
   }
 
   /// Desktop gateway connection-state transitions.
