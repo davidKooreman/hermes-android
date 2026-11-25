@@ -73,6 +73,19 @@ flutter build apk --release
 - The arm64 split targets a modern phone (`versionCode = base * 10 + 2`); the universal APK is for mixed fleets and manual installs.
 - Verify with `aapt dump badging <apk> | grep ^package:` and `apksigner verify --print-certs <apk>`.
 
+## Android Auto integration we had to restore on 4.0.16
+
+Upstream 4.0.16 keeps only the token-based conversation path. To get a reply from a fresh session working in the car we re-added the notification/reply stack on top of it:
+
+| Piece | What it does |
+|---|---|
+| `AutoMessagingPlugin` + `showAssistantMessage` | Extra channel method that posts an assistant answer without the ticket round-trip. |
+| `HermesAutoNotifications.postAssistant()` | `MessagingStyle` + `CarExtender.UnreadConversation`, reply action opens `MainActivity` with `session_id` / `voice_reply` / `connection_json`. |
+| `MainActivity.launchActionFor()` | Rebuilds a JSON launch action (`quickChat`, `newChat`, `voiceReply`). |
+| `MainActivity.extractVoiceReplyFromRemoteInput()` | Reads the RemoteInput bundle — see gotcha 7. |
+| `MessageReadReceiver` | Cancels the notification for the mark-as-read action. |
+| `HermesAppState._sendVoiceReplyHeadless()` | Sends the reply over `DesktopGatewayClient`, posts the answer, speaks it with `flutter_tts`. |
+
 ## Gotchas we hit
 
 1. **A listener in `HomeScreenState` is invisible in NextGen.** `HomeScreen` is never mounted when the NextGen home is active, so any launch/voice handling placed there silently does nothing. Route it at `HermesAppState` (app root) or in the service layer.
@@ -81,6 +94,8 @@ flutter build apk --release
 4. **`versionCode` must stay above the installed one.** Upstream's `4.0.16+3072` is far below our fork code; a plain `adb install -r` of the upstream APK is rejected as a downgrade.
 5. **`--split-per-abi` does not emit a universal APK.** Run `flutter build apk --release` separately when a fat APK is needed.
 6. **`debugPrint` markers are dev-only.** Strip exploratory logging before shipping a build.
+7. **RemoteInput reply text is not an intent extra.** Android delivers it only via `RemoteInput.getResultsFromIntent(intent)`; reading `getStringExtra("voice_reply")` silently yields nothing. The `PendingIntent` must also be `FLAG_MUTABLE`.
+8. **Never stop a just-started foreground service.** A `startForegroundService()`/`stopService()` pair milliseconds apart makes Android tear the service down mid-promotion and throw `ForegroundServiceDidNotStartInTimeException`, killing the process. Stamp the start time *before* the native call and debounce the stop (~700 ms).
 
 ## Open questions for upstream
 
