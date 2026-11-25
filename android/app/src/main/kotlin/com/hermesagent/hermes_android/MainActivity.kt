@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.WindowManager
+import androidx.core.app.RemoteInput
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -35,6 +36,7 @@ class MainActivity : FlutterActivity() {
     private var handsFreeVoice: HandsFreeVoicePlugin? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        extractVoiceReplyFromRemoteInput(intent)
         initialShareIntent = intent.takeIf(::isShareIntent)
         initialLaunchAction = launchActionFor(intent)
         super.onCreate(savedInstanceState)
@@ -178,6 +180,7 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        extractVoiceReplyFromRemoteInput(intent)
         WindowViewport.refresh(window.decorView)
         runCatching { MobilePushBridge.captureTap(this, intent) }
         if (intent?.action == HermesAutoNotifications.OPEN) runCatching { HermesAutoNotifications.receive(this, intent) }
@@ -230,6 +233,14 @@ class MainActivity : FlutterActivity() {
 
     private fun escapeJson(value: String): String =
         value.replace("\\", "\\\\").replace("\"", "\\\"")
+
+    /** Android delivers RemoteInput reply text only via this API, never as a plain extra. */
+    private fun extractVoiceReplyFromRemoteInput(intent: Intent?) {
+        if (intent == null) return
+        val bundle = RemoteInput.getResultsFromIntent(intent) ?: return
+        val message = bundle.getCharSequence("reply")?.toString()
+        if (!message.isNullOrBlank()) intent.putExtra(voiceReplyExtra, message)
+    }
 
     private fun isShareIntent(intent: Intent?): Boolean =
         intent?.action == Intent.ACTION_SEND || intent?.action == Intent.ACTION_SEND_MULTIPLE
