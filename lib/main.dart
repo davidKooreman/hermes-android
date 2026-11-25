@@ -447,6 +447,11 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
       manager: widget.connManager,
       turns: _turnApplicationController,
       onOpen: (c, id) => _openNotificationSession(c, id),
+      onNewChatReply: (c, text) async {
+        // A car reply whose session is gone, or the "new chat" entry: open a
+        // fresh NextGen chat and send the text there.
+        pendingNextGenVoiceReply.value = text;
+      },
     );
     _autoMessaging.initialize();
     notificationResponseHandler = _notificationHandler;

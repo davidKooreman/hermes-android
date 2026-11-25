@@ -64,6 +64,9 @@ bool routeNotificationAnswerToNextGen({
 /// ChatService does.
 final ValueNotifier<bool> nextGenTurnActive = ValueNotifier(false);
 
+/// A car reply that must open a NextGen chat once the shell is ready.
+final ValueNotifier<String?> pendingNextGenVoiceReply = ValueNotifier(null);
+
 /// The accents NextGen offers (Kyllene's palette: one blue, five others).
 enum NgAccent { blue, violet, green, orange, pink, teal }
 

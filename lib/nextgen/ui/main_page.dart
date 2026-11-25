@@ -60,12 +60,19 @@ class _NgMainPageState extends State<_NgMainContent>
     WidgetsBinding.instance.addObserver(this);
     nextGenOpenRequest.addListener(_onOpenRequest);
     nextGenNotificationAnswer.addListener(_onNotificationAnswer);
+    pendingNextGenVoiceReply.addListener(_onPendingVoiceReply);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && pendingNextGenVoiceReply.value != null) {
+        unawaited(_onPendingVoiceReply());
+      }
+    });
   }
 
   @override
   void dispose() {
     nextGenOpenRequest.removeListener(_onOpenRequest);
     nextGenNotificationAnswer.removeListener(_onNotificationAnswer);
+    pendingNextGenVoiceReply.removeListener(_onPendingVoiceReply);
     _requestSub?.cancel();
     _withdrawnSub?.cancel();
     _watchedGateway?.removeListener(_onGatewayChanged);
@@ -100,6 +107,21 @@ class _NgMainPageState extends State<_NgMainContent>
     _scaffold.currentState?.closeDrawer();
     if (id == _chat?.storedId) return;
     _openId(id, '');
+  }
+
+  /// Car reply for a missing or new session: open a fresh NextGen chat and
+  /// send the text there.
+  Future<void> _onPendingVoiceReply() async {
+    if (!mounted) return;
+    final text = pendingNextGenVoiceReply.value;
+    if (text == null || text.trim().isEmpty) return;
+    pendingNextGenVoiceReply.value = null;
+    _newChat();
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    if (!mounted) return;
+    final chat = _chat;
+    if (chat == null) return;
+    await chat.send(text);
   }
 
   @override

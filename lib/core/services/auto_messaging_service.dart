@@ -20,6 +20,7 @@ class AutoMessagingService {
     required this.manager,
     required this.turns,
     this.onOpen,
+    this.onNewChatReply,
     MethodChannel? channel,
     NormalGatewayApplicationSession Function(SavedConnection)? sessionFor,
     Future<Session?> Function(
@@ -50,6 +51,10 @@ class AutoMessagingService {
   final ConnectionManager manager;
   final GatewayTurnApplicationController turns;
   final Future<void> Function(SavedConnection, String)? onOpen;
+
+  /// A reply whose session no longer exists (or the "new chat" entry): the
+  /// app opens a fresh NextGen chat and sends the text there.
+  final Future<void> Function(SavedConnection, String)? onNewChatReply;
   final MethodChannel channel;
   final bool supported;
   final NormalGatewayApplicationSession Function(SavedConnection) _sessionFor;
@@ -152,10 +157,16 @@ class AutoMessagingService {
       if (!await allowed()) return;
       final c = connection()!;
       final session = await _lookup(c, sessionId, allowed, current);
-      if (!await allowed() ||
-          session == null ||
-          session.id != sessionId ||
-          session.isLocalDraft) {
+      if (!await allowed()) return;
+      if (session == null || session.id != sessionId || session.isLocalDraft) {
+        final replyText = action['text'] as String?;
+        if (action['kind'] == 'reply' &&
+            replyText != null &&
+            replyText.trim().isNotEmpty &&
+            replyText.length <= 16000 &&
+            onNewChatReply != null) {
+          await onNewChatReply!.call(c, replyText);
+        }
         return;
       }
       if (action['kind'] == 'read') {
