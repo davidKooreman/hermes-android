@@ -20,6 +20,7 @@ class ConnectionKeepAliveService {
   bool _desiredActive = false;
   bool _pendingStart = false;
   int _cycle = 0;
+  DateTime? _lastStartAt;
   final Set<Future<void>> _stops = {};
 
   bool get isActive => _active;
@@ -42,6 +43,9 @@ class ConnectionKeepAliveService {
       if (!_desiredActive || !_enabled) return;
       final cycle = _cycle;
       var started = false;
+      // Stamp before the native call: a stop arriving while start() is still
+      // awaiting would otherwise see null and tear the service down mid-promotion.
+      _lastStartAt = DateTime.now();
       try {
         started = await channel.invokeMethod<bool>('start') ?? false;
       } on PlatformException {
@@ -71,6 +75,17 @@ class ConnectionKeepAliveService {
     _desiredActive = false;
     _pendingStart = false;
     _active = false;
+    // Never stop a service started less than ~700 ms ago: Android brings it
+    // down while it is still promoting to foreground, which raises
+    // ForegroundServiceDidNotStartInTimeException and kills the process.
+    final startedAt = _lastStartAt;
+    if (startedAt != null) {
+      final elapsed = DateTime.now().difference(startedAt);
+      const settle = Duration(milliseconds: 700);
+      if (elapsed < settle) {
+        await Future<void>.delayed(settle - elapsed);
+      }
+    }
     // Unconditional native stop also recovers divergence after engine attach.
     await _sendStop();
   }

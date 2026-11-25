@@ -14,8 +14,9 @@ import android.util.Log
  */
 class MessageReadReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val sessionId = intent.getStringExtra(HermesAutoNotifications.EXTRA_SESSION_ID) ?: return
+        val sessionId = intent.getStringExtra("session_id") ?: return
         Log.d("HermesAuto", "MessageReadReceiver sessionId=$sessionId")
-        HermesAutoNotifications.cancelSessionNotification(context, sessionId)
+        val id = (sessionId.hashCode() and 0x0fffffff) or 0x10000000
+        context.getSystemService(android.app.NotificationManager::class.java)?.cancel(id)
     }
 }

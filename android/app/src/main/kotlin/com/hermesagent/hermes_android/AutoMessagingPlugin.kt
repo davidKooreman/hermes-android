@@ -24,6 +24,7 @@ internal class AutoMessagingPlugin : FlutterPlugin {
                     result.success(when (call.method) {
                         "ticket" -> HermesAutoNotifications.ticket(c, args)
                         "show" -> HermesAutoNotifications.post(c, args)
+                        "showAssistantMessage" -> HermesAutoNotifications.postAssistant(c, args)
                         "claim" -> HermesAutoNotifications.claim(c)
                         "current" -> HermesAutoNotifications.current(c, args["token"] as String)
                         "cancel" -> { HermesAutoNotifications.cancel(c, (args["id"] as Number).toInt()); null }

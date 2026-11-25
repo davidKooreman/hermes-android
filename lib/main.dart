@@ -6,10 +6,10 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'core/services/hands_free_route_observer.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/models/client_certificate.dart';
 import 'core/services/android_launch_intent_service.dart';
+import 'core/utils/new_chat_options.dart';
 import 'core/services/android_share_intent_service.dart';
 import 'core/services/auto_messaging_service.dart';
 import 'core/services/client_certificate_service.dart';
@@ -38,7 +38,6 @@ import 'core/screens/chat_screen.dart';
 import 'core/screens/workspace_screen.dart';
 import 'core/theme/hermes_theme.dart';
 import 'core/utils/responsive.dart';
-import 'core/utils/new_chat_options.dart';
 import 'core/widgets/config_backup_card.dart';
 import 'core/widgets/theme_palette_picker.dart';
 import 'core/widgets/hermes_system_ui.dart';
@@ -46,6 +45,7 @@ import 'core/widgets/setup_interface_choice.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'package:hermes_android/core/l10n/l10n.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 import 'nextgen/nextgen_home.dart';
 import 'nextgen/ui/connect_screen.dart';
@@ -91,7 +91,6 @@ class _StartupAppState extends State<StartupApp> {
     super.initState();
     // A pending secure-store read must not keep the native splash on screen.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      AutoMessagingService.initialize();
       if (mounted) unawaited(_initialize());
     });
   }
@@ -112,11 +111,6 @@ class _StartupAppState extends State<StartupApp> {
           // interfaces; a Keystore fault only costs those sign-ins.
           await HermesSignInVault.instance.load().catchError((Object _) {});
           connManager = await _createConnectionManager(prefs);
-          if (connManager != null) {
-            await AutoMessagingService.publishAutoEntryForConnections(
-              connManager!.getConnections(),
-            );
-          }
         } catch (error) {
           // A corrupt connection entry or a Keystore fault must lead to the
           // existing reset/retry screen, never to Home with unhydrated secrets.
@@ -462,17 +456,16 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
       },
     );
     _autoMessaging.initialize();
+    widget.launchIntents?.pendingAction.addListener(_onLaunchAction);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _onLaunchAction();
+    });
     notificationResponseHandler = _notificationHandler;
     ConnectionMutationBarrier.addListener(_pruneApprovalActions);
-    // Android Auto / launcher actions must be handled at the app root: the
-    // NextGen home does not mount HomeScreen, so a HomeScreen-only listener
-    // would silently drop every voice reply.
-    widget.launchIntents?.pendingAction.addListener(_onLaunchAction);
     // A notification that launched a terminated app carries its tap/action in
     // the platform's launch details; route it once the first frame is up.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      _onLaunchAction();
       final initialGeneration = _notificationGeneration;
       _rootFrameReady = true;
       unawaited(_loadBackgroundPolicy());
@@ -530,10 +523,6 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
     _ongoingSignature = null;
     _syncOngoingChats();
   }
-
-  // ---------------------------------------------------------------------------
-  // Android Auto / launcher launch actions (app-root routing)
-  // ---------------------------------------------------------------------------
 
   void _onLaunchAction() {
     if (!mounted) return;
@@ -659,6 +648,12 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
     );
     if (!mounted) return;
     if (!delivered) {
+      if (nextGenEnabled.value) {
+        // NextGen owns the chat surface; hand the reply to MainPage so it
+        // opens a fresh NextGen chat instead of the Classic ChatScreen.
+        pendingNextGenVoiceReply.value = message;
+        return;
+      }
       nav.push(
         MaterialPageRoute<void>(
           builder: (_) => ChatScreen(
@@ -738,6 +733,7 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
       gateway.close();
     }
   }
+
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -1635,9 +1631,6 @@ class HomeScreenState extends State<HomeScreen> {
 
   void _refresh() {
     setState(() => _connections = widget.connManager.getConnections());
-    unawaited(
-      AutoMessagingService.publishAutoEntryForConnections(_connections),
-    );
     final controller = widget.turnApplicationController;
     for (final connection in _connections) {
       if (DesktopGatewayClient.endpointDigestFor(connection) == null) {
@@ -1773,8 +1766,6 @@ class HomeScreenState extends State<HomeScreen> {
     _refresh();
     widget.shareIntents?.pendingShare.addListener(_onSharedText);
     widget.launchIntents?.pendingQuickChat.addListener(_onQuickChat);
-    // Launch actions are routed at the app root (HermesAppState) so they also
-    // work when the NextGen home is active instead of HomeScreen.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _onSharedText();
       _onQuickChat();
@@ -1807,126 +1798,10 @@ class HomeScreenState extends State<HomeScreen> {
     _navigateToWorkspace(connection);
   }
 
-  void _onLaunchAction() {
-    if (!mounted) return;
-    final action = widget.launchIntents?.takePendingAction();
-    debugPrint('[HermesAuto] _onLaunchAction action=${action?.kind} sessionId=${action?.sessionId} message=${action?.message}');
-    if (action == null) return;
-    switch (action.kind) {
-      case LaunchActionKind.quickChat:
-        _onQuickChat();
-        break;
-      case LaunchActionKind.newChat:
-        _handleNewChat(action);
-        break;
-      case LaunchActionKind.voiceReply:
-        _handleVoiceReply(action);
-        break;
-    }
-  }
-
-  SavedConnection? _connectionForLaunchAction(LaunchAction action) {
-    String? id;
-    final json = action.connectionJson;
-    if (json != null && json.isNotEmpty) {
-      try {
-        final map = jsonDecode(json) as Map<String, dynamic>;
-        id = map['id'] as String?;
-      } catch (_) {
-        // Fall through to default connection selection.
-      }
-    }
-    if (id != null && id.isNotEmpty) {
-      final match = _connections.where((c) => c.id == id).firstOrNull;
-      if (match != null) return match;
-    }
-    return _connectionForExternalAction();
-  }
-
-  void _handleNewChat(LaunchAction action) {
-    final connection = _connectionForLaunchAction(action);
-    if (connection == null) return;
-    _autoNavigated = true;
-    _navigateToWorkspace(connection);
-  }
-
-  Future<void> _handleVoiceReply(LaunchAction action) async {
-    final sessionId = action.sessionId;
-    final message = action.message;
-    debugPrint('[HermesAuto] _handleVoiceReply sessionId=$sessionId message=$message');
-    if (sessionId == null ||
-        sessionId.isEmpty ||
-        message == null ||
-        message.isEmpty) {
-      return;
-    }
-    final connection = _connectionForLaunchAction(action);
-    debugPrint('[HermesAuto] _handleVoiceReply connection=${connection?.id}');
-    if (connection == null) return;
-    _autoNavigated = true;
-
-    // The persistent "start new conversation" notification replies on the
-    // __new__ sentinel. It is not a real session id, so resolve it to a fresh
-    // quick-chat session and send the reply there.
-    if (sessionId == '__new__') {
-      final now = DateTime.now();
-      final fresh = Session(
-        id: GatewayChatClient.generateSessionId(),
-        title: 'Quick chat',
-        model: kDefaultChatModel,
-        source: 'mobile',
-        messageCount: 0,
-        isActive: true,
-        preview: '',
-        startedAt: now.millisecondsSinceEpoch / 1000.0,
-        isLocalDraft: true,
-      );
-      unawaited(
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ChatScreen(
-              connection: connection,
-              session: fresh,
-              turnApplicationController: widget.turnApplicationController,
-              initialVoiceReply: message,
-            ),
-          ),
-        ),
-      );
-      return;
-    }
-
-    final client = ApiClient.forConnection(connection);
-    final session = await client
-        .getSessionById(sessionId)
-        .catchError((Object _) => null);
-    debugPrint('[HermesAuto] _handleVoiceReply resolved session=${session?.id}');
-    if (!mounted) return;
-    if (session == null) {
-      _navigateToWorkspace(connection);
-      return;
-    }
-    unawaited(
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ChatScreen(
-            connection: connection,
-            session: session,
-            turnApplicationController: widget.turnApplicationController,
-            initialVoiceReply: message,
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   void dispose() {
     widget.shareIntents?.pendingShare.removeListener(_onSharedText);
     widget.launchIntents?.pendingQuickChat.removeListener(_onQuickChat);
-    widget.launchIntents?.pendingAction.removeListener(_onLaunchAction);
     super.dispose();
   }
 
@@ -1943,8 +1818,7 @@ class HomeScreenState extends State<HomeScreen> {
     // The share listener owns this route so the regular last-connection
     // auto-navigation cannot stack a second Workspace above the shared draft.
     if (widget.shareIntents?.pendingShare.value != null ||
-        widget.launchIntents?.pendingQuickChat.value == true ||
-        widget.launchIntents?.pendingAction.value != null) {
+        widget.launchIntents?.pendingQuickChat.value == true) {
       return;
     }
     final lastId = widget.connManager.prefs.getString(_lastConnectionKey);

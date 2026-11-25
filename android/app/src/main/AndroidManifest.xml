@@ -71,6 +71,14 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+        <receiver android:name=".AutoMessageReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="com.hermesagent.hermes_android.AUTO_REPLY" />
+                <action android:name="com.hermesagent.hermes_android.AUTO_READ" />
+                <action android:name="com.hermesagent.hermes_android.AUTO_OPEN" />
+            </intent-filter>
+        </receiver>
+
         <!-- Android Auto: notification-based messaging -->
         <meta-data android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />

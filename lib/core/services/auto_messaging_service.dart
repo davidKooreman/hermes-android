@@ -1,263 +1,265 @@
-// Auto-messaging service platform channel for Android Auto / Android TV.
-// This is the Dart side of the method channel used to start new chats,
-// receive voice replies, and refresh the persistent notification entry.
 import 'dart:async';
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../models/connection.dart';
 
-/// Method channel exposed by the Android side.
-const MethodChannel _channel = MethodChannel(
-  'com.hermesagent.hermes_android/auto',
-);
+import '../../nextgen/data/seen_chats.dart';
+import '../../nextgen/nextgen_preferences.dart';
+import 'connection_manager.dart';
+import 'connection_mutation_barrier.dart';
+import 'gateway_turn_application_controller.dart';
+import 'dashboard_api_client.dart';
+import 'mobile_push_service.dart';
+import 'normal_gateway_application_session.dart';
+import 'notification_prefs.dart';
 
-/// Sentinel session id used by Android Auto "start new conversation" replies.
-const String newSessionSentinel = '__new__';
-
-/// Callback signature for a "start new conversation" tap from Android Auto.
-typedef NewChatCallback = void Function(SavedConnection? connection);
-
-/// Callback signature for a voice reply from Android Auto.
-typedef VoiceReplyCallback = void Function(
-  String sessionId,
-  String message,
-  SavedConnection? connection,
-);
-
-/// Pending voice reply stored when no callback is registered yet.
-typedef _PendingVoiceReply = ({String sessionId, String message, SavedConnection? connection});
-
-// Registers the Android Auto method channel and exposes callbacks.
+/// Existing-session actions only. Native claims are sealed, expiring and
+/// single-use BEFORE network work. Uncertain delivery never triggers a UI resend.
 class AutoMessagingService {
-  static NewChatCallback? _onNewChat;
-  static VoiceReplyCallback? _onVoiceReply;
-  static _PendingVoiceReply? _pendingVoiceReply;
+  AutoMessagingService({
+    required this.manager,
+    required this.turns,
+    this.onOpen,
+    this.onNewChatReply,
+    MethodChannel? channel,
+    NormalGatewayApplicationSession Function(SavedConnection)? sessionFor,
+    Future<Session?> Function(
+      SavedConnection,
+      String,
+      Future<bool> Function(),
+      bool Function(),
+    )?
+    lookup,
+    bool? supported,
+  }) : channel = channel ?? platform,
+       supported = supported ?? defaultTargetPlatform == TargetPlatform.android,
+       _sessionFor = sessionFor ?? turns.normalSessionFor,
+       _lookup = lookup ?? _findSession;
+  static const platform = MethodChannel('com.hermesagent.hermes_android/auto');
 
-  static bool _initialized = false;
-
-  // ignore: unused_field
-  static const String _prefsName = 'hermes_auto';
-  static const String _pendingSessionKey = 'pending_voice_reply_session';
-  static const String _pendingMessageKey = 'pending_voice_reply_message';
-  static const String _pendingConnectionKey = 'pending_voice_reply_connection';
-
-  // ignore: unnecessary_getters_setters
-  /// Callback for a "start new conversation" tap from Android Auto.
-  static set onNewChat(NewChatCallback? callback) {
-    _onNewChat = callback;
-  }
-
-  // ignore: unnecessary_getters_setters
-  static NewChatCallback? get onNewChat => _onNewChat;
-
-  // ignore: unnecessary_getters_setters
-  /// Callback for a voice reply from Android Auto. Pending replies are delivered
-  /// immediately when a listener is attached.
-  static set onVoiceReply(VoiceReplyCallback? callback) {
-    _onVoiceReply = callback;
-    _flushPendingVoiceReply();
-  }
-
-  // ignore: unnecessary_getters_setters
-  static VoiceReplyCallback? get onVoiceReply => _onVoiceReply;
-
-  /// Initialize once from main(). Starts the Android foreground service if
-  /// there is at least one saved connection, so background voice replies keep
-  /// working even when the phone is dozing.
-  static void initialize() {
-    if (_initialized) return;
-    _initialized = true;
-    _channel.setMethodCallHandler(_handleMethodCall);
-    _loadPendingVoiceReply();
-    startForegroundService();
-  }
-
-  /// Ask Android to keep the app alive in the background.
-  static Future<void> startForegroundService() async {
-    try {
-      await _channel.invokeMethod('startForegroundService');
-    } catch (_) {
-      // Method channel may be unavailable on non-Android platforms.
-    }
-  }
-
-  /// Stop the background keep-alive service.
-  static Future<void> stopForegroundService() async {
-    try {
-      await _channel.invokeMethod('stopForegroundService');
-    } catch (_) {
-      // Method channel may be unavailable on non-Android platforms.
-    }
-  }
-
-  static Future<void> _loadPendingVoiceReply() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final sessionId = prefs.getString(_pendingSessionKey);
-      final message = prefs.getString(_pendingMessageKey);
-      final connectionJson = prefs.getString(_pendingConnectionKey);
-      if (sessionId == null ||
-          sessionId.isEmpty ||
-          message == null ||
-          message.isEmpty) {
-        return;
-      }
-      SavedConnection? connection;
-      if (connectionJson != null && connectionJson.isNotEmpty) {
-        try {
-          connection = SavedConnection.fromMap(
-            jsonDecode(connectionJson) as Map<String, dynamic>,
-          );
-        } catch (_) {
-          connection = null;
-        }
-      }
-      _pendingVoiceReply = (sessionId: sessionId, message: message, connection: connection);
-      // Defer flush until after main() finishes so listeners can attach.
-      Future.delayed(const Duration(milliseconds: 100), _flushPendingVoiceReply);
-      await _clearPendingVoiceReply();
-    } catch (_) {
-      // Ignore platform errors.
-    }
-  }
-
-  static void _flushPendingVoiceReply() {
-    final callback = _onVoiceReply;
-    final pending = _pendingVoiceReply;
-    if (callback == null || pending == null) return;
-    _pendingVoiceReply = null;
-    callback(pending.sessionId, pending.message, pending.connection);
-  }
-
-  static Future<void> _storePendingVoiceReply(
-    String sessionId,
-    String message,
-    String connectionJson,
-  ) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_pendingSessionKey, sessionId);
-      await prefs.setString(_pendingMessageKey, message);
-      await prefs.setString(_pendingConnectionKey, connectionJson);
-    } catch (_) {
-      // Ignore platform errors.
-    }
-  }
-
-  static Future<void> _clearPendingVoiceReply() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_pendingSessionKey);
-      await prefs.remove(_pendingMessageKey);
-      await prefs.remove(_pendingConnectionKey);
-    } catch (_) {
-      // Ignore platform errors.
-    }
-  }
-
-  static Future<dynamic> _handleMethodCall(MethodCall call) async {
-    final args = call.arguments as Map<dynamic, dynamic>? ?? {};
-    final connectionJson = args['connectionJson'] as String?;
-    SavedConnection? connection;
-    if (connectionJson != null && connectionJson.isNotEmpty) {
-      try {
-        connection = SavedConnection.fromMap(
-          jsonDecode(connectionJson) as Map<String, dynamic>,
-        );
-      } catch (_) {
-        connection = null;
-      }
-    }
-
-    switch (call.method) {
-      case 'newChat':
-        _onNewChat?.call(connection);
-        return null;
-      case 'voiceReply':
-        final sessionId = args['sessionId'] as String? ?? '';
-        final message = args['message'] as String? ?? '';
-        final callback = _onVoiceReply;
-        if (callback != null) {
-          _clearPendingVoiceReply();
-          callback(sessionId, message, connection);
-        } else {
-          // Buffer the reply and persist it so it survives app restart.
-          _pendingVoiceReply = (
-            sessionId: sessionId,
-            message: message,
-            connection: connection,
-          );
-          await _storePendingVoiceReply(
-            sessionId,
-            message,
-            connectionJson ?? '',
-          );
-        }
-        return null;
-      default:
-        return null;
-    }
-  }
-
-  /// Publishes (or refreshes) the persistent Android Auto entry using the first
-  /// saved connection. This is safe to call from app launch: the JSON sent to
-  /// Android contains only the connection id and label, never the API key or
-  /// dashboard credentials.
-  static Future<void> publishAutoEntryForConnections(
-    List<SavedConnection> connections,
-  ) async {
-    if (connections.isEmpty) return;
-    final safe = safeConnectionJson(connections.first);
-    await showNewChatEntry(connectionJson: safe);
-  }
-
-  /// A minimal connection description that can be stored by Android Auto
-  /// receivers and forwarded back to the running app. Secrets are stripped
-  /// because this JSON may be persisted in SharedPreferences and passed across
-  /// process boundaries.
-  static String safeConnectionJson(SavedConnection connection) =>
-      jsonEncode({'id': connection.id, 'label': connection.label});
-
-  /// Show or refresh the persistent Android Auto "start new conversation" entry.
-  static Future<void> showNewChatEntry({String? connectionJson}) async {
-    try {
-      await _channel.invokeMethod('showNewChatEntry', {
-        'connectionJson': connectionJson ?? '',
-      });
-    } catch (_) {
-      // Method channel may be unavailable on non-Android platforms.
-    }
-  }
-
-  /// Update or create a conversation notification for a specific session.
+  /// Posts an assistant answer as a car-compliant conversation notification.
+  /// Used by the Android Auto headless reply path.
   static Future<void> showAssistantMessage({
     required String sessionId,
     required String title,
     required String body,
-    String? connectionJson,
+    required String connectionJson,
   }) async {
     try {
-      await _channel.invokeMethod('showAssistantMessage', {
+      await platform.invokeMethod('showAssistantMessage', {
         'sessionId': sessionId,
         'title': title,
         'body': body,
-        'connectionJson': connectionJson ?? '',
+        'connectionJson': connectionJson,
       });
     } catch (_) {
-      // Ignore platform errors.
+      // Native side unavailable (non-Android or detached engine).
     }
   }
 
-  /// Start or stop the foreground service for background keep-alive.
-  static Future<void> setKeepAlive({required bool active}) async {
+  /// Minimal, credential-free connection descriptor for native notifications.
+  static String safeConnectionJson(SavedConnection connection) =>
+      jsonEncode({'id': connection.id, 'label': connection.label});
+
+  /// Whether this engine's native conversation owner has actually answered.
+  /// Car conversations are attempted only after that proof; until then (other
+  /// platforms, or an engine without the owner registered) completed turns
+  /// keep their existing ordinary alerts instead of waiting on, or being lost
+  /// to, an absent native channel.
+  static bool get ownerAvailable => _ownerAvailable;
+  static bool _ownerAvailable = false;
+  @visibleForTesting
+  static set debugOwnerAvailable(bool value) => _ownerAvailable = value;
+
+  bool get _ownsPlatform => identical(channel, platform);
+  final ConnectionManager manager;
+  final GatewayTurnApplicationController turns;
+  final Future<void> Function(SavedConnection, String)? onOpen;
+
+  /// A reply whose session no longer exists (or the "new chat" entry): the
+  /// app opens a fresh NextGen chat and sends the text there.
+  final Future<void> Function(SavedConnection, String)? onNewChatReply;
+  final MethodChannel channel;
+  final bool supported;
+  final NormalGatewayApplicationSession Function(SavedConnection) _sessionFor;
+  final Future<Session?> Function(
+    SavedConnection,
+    String,
+    Future<bool> Function(),
+    bool Function(),
+  )
+  _lookup;
+  bool _closed = false;
+  Future<void>? _flight;
+  bool _dirty = false;
+  static Future<Session?> _findSession(
+    SavedConnection c,
+    String id,
+    Future<bool> Function() allowed,
+    bool Function() current,
+  ) async {
+    final api = DashboardApiClient.fromConnection(c);
     try {
-      await _channel.invokeMethod(
-        active ? 'startForegroundService' : 'stopForegroundService',
-        {},
+      return await api.getSessionById(
+        id,
+        canContinue: allowed,
+        isCurrent: current,
       );
-    } catch (_) {
-      // Ignore platform errors.
+    } finally {
+      api.close();
     }
+  }
+
+  void initialize() {
+    if (!supported) return;
+    channel.setMethodCallHandler((call) async {
+      if (call.method == 'changed') {
+        if (_ownsPlatform) _ownerAvailable = true;
+        unawaited(drain());
+      }
+    });
+    unawaited(drain());
+  }
+
+  Future<void> drain() {
+    if (_closed || !supported) return Future.value();
+    _dirty = true;
+    return _flight ??= _drain().whenComplete(() => _flight = null);
+  }
+
+  Future<void> _drain() async {
+    try {
+      while (_dirty && !_closed) {
+        _dirty = false;
+        while (!_closed) {
+          final raw = await channel.invokeMapMethod<String, dynamic>('claim');
+          if (_ownsPlatform && !_closed) _ownerAvailable = true;
+          if (raw == null || _closed) break;
+          await _consume(Map<String, dynamic>.from(raw));
+        }
+      }
+    } on MissingPluginException {
+      // No native owner in this engine: it cannot have minted a conversation.
+      if (_ownsPlatform) _ownerAvailable = false;
+    } catch (_) {
+      // A lost claim acknowledgement is uncertain, not permission to retry.
+    }
+  }
+
+  Future<void> _consume(Map<String, dynamic> action) async {
+    final token = action['token'] as String?;
+    final id = action['connectionId'] as String?;
+    final sessionId = action['sessionId'] as String?;
+    if (token == null ||
+        id == null ||
+        sessionId == null ||
+        sessionId == '__new__') {
+      return;
+    }
+    final mutation = ConnectionMutationBarrier.capture(id);
+    SavedConnection? connection() =>
+        manager.getConnections().where((c) => c.id == id).firstOrNull;
+    bool current() =>
+        !_closed &&
+        !nextGenTurnActive.value &&
+        ConnectionMutationBarrier.isCurrent(id, mutation) &&
+        notificationKindEnabled(HermesNotificationKind.turnDone) &&
+        connection() != null &&
+        MobilePushService.binding(connection()!) == action['binding'];
+    Future<bool> allowed() async {
+      if (!current()) return false;
+      final native = await channel.invokeMethod<bool>('current', {
+        'token': token,
+      });
+      return native == true && current();
+    }
+
+    try {
+      await NotificationPrefsStore.load();
+      if (!await allowed()) return;
+      await manager.refreshConnectionCredentials(id);
+      if (!await allowed()) return;
+      final c = connection()!;
+      final session = await _lookup(c, sessionId, allowed, current);
+      if (!await allowed()) return;
+      if (session == null || session.id != sessionId || session.isLocalDraft) {
+        final replyText = action['text'] as String?;
+        if (action['kind'] == 'reply' &&
+            replyText != null &&
+            replyText.trim().isNotEmpty &&
+            replyText.length <= 16000 &&
+            onNewChatReply != null) {
+          await onNewChatReply!.call(c, replyText);
+        }
+        return;
+      }
+      if (action['kind'] == 'read') {
+        NgSeenStore(
+          manager.prefs,
+          id,
+        ).markLooked(sessionId, DateTime.now().millisecondsSinceEpoch / 1000.0);
+        return;
+      }
+      if (action['kind'] == 'open') {
+        await onOpen?.call(c, sessionId);
+        return;
+      }
+      if (action['kind'] != 'reply') return;
+      final text = action['text'] as String?;
+      if (text == null || text.trim().isEmpty || text.length > 16000) return;
+      final owner = _sessionFor(c);
+      await owner.ready;
+      if (!await allowed()) return;
+      final transport = owner.client;
+      if (transport != null) {
+        final resumed = await transport.resumeSubmittedSession(
+          localSessionId: sessionId,
+          storedSessionId: sessionId,
+          beforeRequest: allowed,
+          acceptsResult: current,
+        );
+        if (!await allowed() ||
+            resumed.running != false ||
+            resumed.openRequests.isNotEmpty) {
+          return;
+        }
+      }
+      final chat = owner.chatFor(
+        sessionId,
+        storedSessionId: sessionId,
+        title: session.title,
+      );
+      final reservation = chat.reserve();
+      if (reservation == null) return;
+      try {
+        if (!await allowed()) return;
+        await chat.submitPrepared(
+          reservation: reservation,
+          text: text,
+          localContent: text,
+          knownStoredSessionId: sessionId,
+          maySubmit: current,
+          beforeSend: allowed,
+        );
+      } finally {
+        chat.cancelPreparation(reservation);
+      }
+    } catch (_) {
+      // Never log content/credentials/provider errors, create a session or resend.
+    } finally {
+      try {
+        await channel.invokeMethod<void>('finish', {'token': token});
+      } catch (_) {
+        /* no resend */
+      }
+    }
+  }
+
+  void dispose() {
+    _closed = true;
+    if (supported) channel.setMethodCallHandler(null);
+    // A later owner must prove the native channel again.
+    if (supported && _ownsPlatform) _ownerAvailable = false;
   }
 }
