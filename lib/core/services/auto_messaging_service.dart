@@ -58,6 +58,18 @@ class AutoMessagingService {
     }
   }
 
+  /// Posts the persistent "Quick chat" entry so Android Auto shows a
+  /// start-a-new-chat thread.
+  static Future<void> showNewChatEntry(SavedConnection connection) async {
+    try {
+      await platform.invokeMethod('showNewChatEntry', {
+        'connectionJson': safeConnectionJson(connection),
+      });
+    } catch (_) {
+      // Native side unavailable.
+    }
+  }
+
   /// Minimal, credential-free connection descriptor for native notifications.
   static String safeConnectionJson(SavedConnection connection) =>
       jsonEncode({'id': connection.id, 'label': connection.label});

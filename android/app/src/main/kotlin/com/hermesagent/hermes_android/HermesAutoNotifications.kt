@@ -100,6 +100,53 @@ internal object HermesAutoNotifications {
     }
 
     /**
+     * Persistent "Quick chat" entry: tap opens a new chat, reply starts one by voice.
+     */
+    fun showNewChatEntry(c: Context, args: Map<*, *>): Boolean {
+        if (!policy(c)) return false
+        val connectionJson = (args["connectionJson"] as? String).orEmpty()
+        if (Build.VERSION.SDK_INT >= 26) manager(c).createNotificationChannel(
+            NotificationChannel(CHANNEL, "Ares conversations", NotificationManager.IMPORTANCE_DEFAULT))
+        val tapIntent = PendingIntent.getActivity(c, 3,
+            Intent(c, MainActivity::class.java)
+                .setAction("com.hermesagent.hermes_android.action.NEW_CHAT")
+                .putExtra("new_chat", true)
+                .putExtra("connection_json", connectionJson),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val replyIntent = Intent(c, MainActivity::class.java)
+            .setAction("com.hermesagent.hermes_android.action.VOICE_REPLY")
+            .putExtra("session_id", "__new__")
+            .putExtra("voice_reply", "")
+            .putExtra("connection_json", connectionJson)
+        val reply = PendingIntent.getActivity(c, 4, replyIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0))
+        val remote = RemoteInput.Builder("reply").setLabel("Voice reply").build()
+        val replyAction = NotificationCompat.Action.Builder(android.R.drawable.ic_btn_speak_now, "Reply", reply)
+            .addRemoteInput(remote).setAllowGeneratedReplies(false)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY).build()
+        val title = "Quick chat"
+        val body = "Tap or speak to start a new chat"
+        val user = Person.Builder().setName("You").setKey("user").build()
+        val ares = Person.Builder().setName(title).setKey("hermes").setImportant(true).build()
+        val style = NotificationCompat.MessagingStyle(user)
+            .setConversationTitle(title)
+            .addMessage(NotificationCompat.MessagingStyle.Message(body, System.currentTimeMillis(), ares))
+            .setGroupConversation(false)
+        val car = NotificationCompat.CarExtender.UnreadConversation.Builder(title)
+            .addMessage(body).setReadPendingIntent(tapIntent).setReplyAction(reply, remote)
+            .setLatestTimestamp(System.currentTimeMillis()).build()
+        manager(c).notify(0x0A11CE, NotificationCompat.Builder(c, CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_mobile_push)
+            .setContentTitle(title).setContentText(body).setStyle(style).setContentIntent(tapIntent)
+            .setAutoCancel(false).setOngoing(true).setCategory(Notification.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(replyAction)
+            .extend(NotificationCompat.CarExtender().setUnreadConversation(car)).build())
+        return true
+    }
+
+    /**
      * Posts an assistant answer as a car-compliant conversation notification
      * without the token round-trip. Used by the headless Android Auto reply
      * path: the reply action opens MainActivity with ACTION_VOICE_REPLY.

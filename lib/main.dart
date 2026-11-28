@@ -456,6 +456,11 @@ class HermesAppState extends State<HermesApp> with WidgetsBindingObserver {
       },
     );
     _autoMessaging.initialize();
+    // Surface the Quick chat entry in Android Auto for the last-used connection.
+    final quickChatConnection = widget.connManager.getConnections().firstOrNull;
+    if (quickChatConnection != null) {
+      unawaited(AutoMessagingService.showNewChatEntry(quickChatConnection));
+    }
     widget.launchIntents?.pendingAction.addListener(_onLaunchAction);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _onLaunchAction();

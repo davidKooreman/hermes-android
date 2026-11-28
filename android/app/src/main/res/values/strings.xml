@@ -3,6 +3,8 @@
     <string name="shortcut_quick_chat_short">New Quick Chat</string>
     <string name="shortcut_quick_chat_long">Start a new Ares Quick Chat</string>
     <string name="new_chat_title">Ares</string>
+    <string name="quick_chat_title">Quick chat</string>
+    <string name="quick_chat_body">Tap or speak to start a new chat</string>
     <string name="new_chat_body_short">Tap to start a new chat</string>
     <string name="user_name">You</string>
     <string name="reply_action_label">Reply</string>
