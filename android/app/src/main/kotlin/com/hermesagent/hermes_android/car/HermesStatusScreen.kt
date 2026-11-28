@@ -125,6 +125,14 @@ class HermesStatusScreen(carContext: CarContext) : Screen(carContext) {
 
         paneBuilder.addRow(
             Row.Builder()
+                .setTitle(CarText.create("＋ Start nieuw gesprek"))
+                .addText(CarText.create("Begin een nieuwe chat en spreek direct in"))
+                .setOnClickListener { startNewConversation() }
+                .build()
+        )
+
+        paneBuilder.addRow(
+            Row.Builder()
                 .setTitle(CarText.create(statusTitle))
                 .addText(CarText.create(statusMessage))
                 .build()
@@ -381,6 +389,21 @@ class HermesStatusScreen(carContext: CarContext) : Screen(carContext) {
                 }
             }
         )
+    }
+
+    /** Clears the active session so the next prompt starts a brand-new chat. */
+    private fun startNewConversation() {
+        val prefs = carContext.getSharedPreferences("HermesCarAuthCache", Context.MODE_PRIVATE)
+        val newSessionId = "mobile-car-" + System.currentTimeMillis()
+        prefs.edit()
+            .putString("session_id", newSessionId)
+            .putString("session_title", "Nieuw gesprek")
+            .apply()
+        statusTitle = "Nieuw gesprek"
+        statusMessage = "Spreek je vraag in."
+        isLoading = false
+        invalidate()
+        startVoiceInput()
     }
 
     private fun sendDirectly(promptText: String) {
